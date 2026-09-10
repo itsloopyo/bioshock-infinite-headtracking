@@ -1,0 +1,23 @@
+; Ordinals are the system xinput1_3.dll's own, and they are load-bearing:
+; BioShockInfinite.exe imports XInputGetState and XInputSetState BY ORDINAL (2 and 3),
+; so a proxy that exported the same names on different numbers would link cleanly and
+; fail the game at load. Ordinal 1 (the system DLL's DllMain) is deliberately left
+; unexported - nothing imports it, and exporting our own entry point invites a caller
+; to run it twice.
+;
+; 100-103 are XInputGetStateEx, XInputWaitForGuideButton, XInputCancelGuideButtonWait
+; and XInputPowerOffController. The system DLL exports them without names and callers
+; bind them by ordinal, so NONAME keeps this proxy interchangeable with it.
+LIBRARY xinput1_3
+EXPORTS
+    XInputGetState                  @2
+    XInputSetState                  @3
+    XInputGetCapabilities           @4
+    XInputEnable                    @5
+    XInputGetDSoundAudioDeviceGuids @6
+    XInputGetBatteryInformation     @7
+    XInputGetKeystroke              @8
+    XInputGetStateEx                @100 NONAME
+    XInputWaitForGuideButton        @101 NONAME
+    XInputCancelGuideButtonWait     @102 NONAME
+    XInputPowerOffController        @103 NONAME

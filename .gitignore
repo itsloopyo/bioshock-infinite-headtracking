@@ -1,0 +1,83 @@
+# Build output
+bin/
+obj/
+out/
+build/
+target/
+x64/
+Win32/
+Debug/
+Release/
+*.dll
+*.asi
+*.exe
+*.pdb
+*.lib
+*.exp
+*.ilk
+
+# Vendored third-party binaries (overrides *.dll/*.exe above)
+!vendor/**/*.dll
+!vendor/**/*.exe
+!vendor/**/*.asi
+
+# CMake
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+CTestTestfile.cmake
+_deps/
+Makefile
+
+# IDE
+.vs/
+.vscode/
+.idea/
+*.user
+*.suo
+*.vcxproj.user
+
+# Release packaging
+dist/
+release/
+
+# Install state
+.headtracking-state.json
+
+# Pixi
+.pixi/
+
+# Agent / AI tooling - machine-generated or local, never commit.
+.claude/
+.lab/
+skills/
+CLAUDE.md
+AGENTS.md
+.mcp.json
+mcp.json
+
+# Store copy, pasted into Nexus by hand
+NEXUS_MODS.md
+
+# Investigation scratch - bulky, not deliverable, reads badly out of context.
+scratch/
+ghidra_projects/
+*.gpr
+*.rep/
+*.dmp
+*.trace
+*.idb
+*.i64
+*.il
+process_*/
+screenshots/
+
+# Logs
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Analysis scripts - session tooling, not part of the shipped mod.
+ghidra_scripts/

@@ -1,0 +1,22 @@
+{
+  "schema_version": 2,
+  "mod_info": {
+    "name": "BioShockInfiniteHeadTracking",
+    "version": "0.0.0",
+    "game_id": "bioshock-infinite"
+  },
+  "strategy": "Shim",
+  "delivery_mode": "manifest",
+
+  "files": [
+    {
+      "source": "plugins/xinput1_3.dll",
+      "target": "Binaries/Win32/xinput1_3.dll",
+      "backup": true
+    }
+  ],
+
+  "runtime_requirements": [],
+
+  "dependencies": []
+}

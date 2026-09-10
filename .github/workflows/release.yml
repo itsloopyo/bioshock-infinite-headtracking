@@ -1,0 +1,31 @@
+name: Release
+run-name: "Release ${{ github.ref_name }}"
+
+# Everything this release does lives in cameraunlock-core's release-mod.yml:
+# checkout with full history and submodules, tag extraction and validation
+# against CMakeLists.txt, MSBuild setup, `pixi run verify-package`, release notes via
+# scripts/generate-release-notes.ps1, the installer ZIP check and
+# `gh release create`. Only the values below are this mod's. Pinned to a commit
+# SHA, never a branch: that workflow runs with contents:write, the Discord
+# webhook and the Lopari PAT.
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+jobs:
+  release:
+    uses: itsloopyo/cameraunlock-core/.github/workflows/release-mod.yml@435915a8a3d8e1b799cc169b74f1fcf72b9534e7
+    with:
+      project-name: 'BioShock Infinite Head Tracking'
+      version-source: cmake
+      version-path: 'CMakeLists.txt'
+      artifact-paths: 'src/ cameraunlock-core scripts/install.cmd scripts/uninstall.cmd CMakeLists.txt launcher-manifest.json'
+      # Packages through the task that also runs the manifest and notices validators, so a
+      # release cannot publish a ZIP the launcher would refuse to deploy.
+      package-task: verify-package
+      setup-msbuild: true
+    permissions:
+      contents: write
+    secrets: inherit

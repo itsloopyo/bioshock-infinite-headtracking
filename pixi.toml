@@ -1,0 +1,61 @@
+[workspace]
+name = "bioshock-infinite-head-tracking"
+version = "0.0.0"
+description = "Head tracking mod for BioShock Infinite via OpenTrack UDP"
+license = "MIT"
+channels = ["conda-forge"]
+platforms = ["win-64"]
+
+[tasks]
+# Sync the cameraunlock-core submodule to its tracked branch.
+sync = "git submodule update --remote cameraunlock-core"
+
+# Configure the CMake build. Win32 because BioShock Infinite is a 32-bit UE3 game and
+# the shim is loaded into that process. No -G: let CMake auto-detect the installed
+# Visual Studio generator, so a runner image moving to a newer VS does not break CI.
+# Run every time rather than skipped when build/ exists. Re-configuring an already
+# configured directory is cheap and idempotent, while skipping it leaves a build/ from a
+# FAILED configure in place and every later build then fails further downstream with a
+# worse error. A directory configured for another platform is not repaired by this either,
+# but it fails loudly here at configure rather than quietly producing the wrong binary.
+setup = "cmake -B build -A Win32"
+
+build = { cmd = "cmake --build build --config Debug", depends-on = ["setup"] }
+build-release = { cmd = "cmake --build build --config Release", depends-on = ["setup"] }
+
+# Build + deploy release next to BioShockInfinite.exe.
+install = { cmd = "powershell -ExecutionPolicy Bypass -File scripts/deploy.ps1 Release", depends-on = ["build-release"] }
+
+# Remove the mod from the game directory. /y keeps it prompt-free under pixi (no TTY).
+uninstall = "scripts/uninstall.cmd /y"
+
+# UE3 rotation maths, the head-pose composition, the aim vector, the INI boundaries and
+# the tracker-port reclaim. Compiled from source every time - never a prebuilt binary.
+test = { cmd = "ctest --test-dir build -C Release --output-on-failure", depends-on = ["build-release"] }
+
+# Package the installer ZIP. Installer-only: see the header of package-release.ps1 for
+# why there is no Nexus archive.
+package = { cmd = "powershell -ExecutionPolicy Bypass -File scripts/package-release.ps1", depends-on = ["build-release", "test"] }
+
+# Both take no arguments: they validate this repo's own newest release ZIP and its own
+# THIRD-PARTY-NOTICES.md.
+validate-manifest = "node cameraunlock-core/scripts/validate-manifest.mjs"
+validate-notices = "node cameraunlock-core/scripts/validate-notices.mjs"
+
+# What CI and `release` both run, and the only packaging entry point that is gated.
+# `package` alone builds a ZIP nobody has checked: the manifest validator is the one thing
+# that catches a payload the launcher cannot deploy - a source file the packager dropped, a
+# target the launcher rejects - and a validator nobody runs catches nothing.
+verify-package = { cmd = "node cameraunlock-core/scripts/validate-manifest.mjs && node cameraunlock-core/scripts/validate-notices.mjs", depends-on = ["package"] }
+
+# Clean build artifacts. No $vars in inline commands - pixi's shell eats them before
+# PowerShell runs.
+clean = { cmd = """
+    powershell -Command "if (Test-Path build) { Remove-Item build -Recurse -Force }; if (Test-Path bin) { Remove-Item bin -Recurse -Force }; Write-Host 'Build artifacts cleaned' -ForegroundColor Green"
+""" }
+
+release = { cmd = "powershell -ExecutionPolicy Bypass -File scripts/release.ps1" }
+
+# Shim-only mod: the payload is a system-DLL proxy the game loads directly, so there is
+# no mod loader to vendor and nothing under vendor/ to refresh.
+update-deps = "powershell -NoProfile -Command \"Write-Host 'No vendored dependencies to update (shim-only mod).'\""
