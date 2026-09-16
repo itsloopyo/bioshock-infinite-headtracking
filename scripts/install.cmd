@@ -25,6 +25,7 @@ set "MOD_INTERNAL_NAME=BioShockInfiniteHeadTracking"
 set "MOD_VERSION=0.0.0"
 set "STATE_FILE=.headtracking-state.json"
 set "FRAMEWORK_TYPE=None"
+set "SHIM_MARKER=BioShock Infinite Head Tracking"
 :: Files copied only when they are not already there, so an upgrade keeps
 :: whatever the user tuned. Listing an .ini in MOD_DLLS instead puts it through
 :: the unconditional copy and the shim byte compare, which resets every key on
