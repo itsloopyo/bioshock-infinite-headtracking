@@ -23,6 +23,13 @@ An unofficial head tracking mod for BioShock Infinite that moves the view with y
 
 ## Installation
 
+### Lopari
+
+Download [Lopari](https://lopari.app), choose **BioShock Infinite**, and click
+**Play with head tracking**.
+
+### Standalone Installer
+
 1. Download the latest `BioShockInfiniteHeadTracking-v<version>-installer.zip` from
    [Releases](https://github.com/itsloopyo/bioshock-infinite-headtracking/releases).
 2. Extract it anywhere.
