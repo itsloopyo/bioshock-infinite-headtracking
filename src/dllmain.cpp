@@ -154,14 +154,14 @@ DWORD WINAPI StatusThread(LPVOID) {
 void ReportConfig() {
     Log::Line("Config: port %u, freshness %d ms, smoothing local %.2f / remote %.2f, "
               "yaw %s, position %s (x %.2f, y +%.2f/-%.2f, z %.2f/-%.2f m), stock crosshair correction %s, "
-              "sights %s, tracking starts %s",
+              "tracking starts %s",
               g_config.udp_port, g_config.data_freshness_ms, g_config.local_smoothing,
               g_config.remote_smoothing,
               g_config.world_space_yaw ? "world-space (horizon-locked)" : "camera-local",
               g_config.position_enabled ? "on" : "off", g_config.pos_limit_x,
               g_config.pos_limit_y, g_config.pos_limit_y_down, g_config.pos_limit_z,
               g_config.pos_limit_z_back,
-              g_config.show_aim_marker ? "on" : "off", AdsModeValue(g_config.ads_mode),
+              g_config.show_aim_marker ? "on" : "off",
               g_config.enabled_on_startup ? "enabled" : "disabled");
 }
 
@@ -229,8 +229,7 @@ DWORD WINAPI InitThread(LPVOID) {
     if (!g_hotkeys.Start(g_config,
                          [] { g_tracking.ToggleEnabled(); },
                          [] { g_tracking.CycleTrackingMode(); },
-                         [] { g_tracking.ToggleYawMode(); },
-                         [] { g_tracking.CycleAdsMode(); })) {
+                         [] { g_tracking.ToggleYawMode(); })) {
         Log::Line("ERROR: no hotkeys, so tracking could not be switched off in game. "
                   "Standing down and staying dormant.");
         GoInert();

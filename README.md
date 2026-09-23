@@ -144,7 +144,6 @@ Two equivalent binding sets - use whichever your keyboard has:
 | Toggle tracking     | `End`       | `Ctrl+Shift+Y`  |
 | Cycle tracking mode | `Page Up`   | `Ctrl+Shift+G`  |
 | Toggle yaw mode     | `Page Down` | `Ctrl+Shift+H`  |
-| Cycle ADS mode      | `Insert`    | `Ctrl+Shift+U`  |
 
 `Page Up` / `Ctrl+Shift+G` cycles tracking mode:
 
@@ -155,25 +154,17 @@ Two equivalent binding sets - use whichever your keyboard has:
 
 `Page Down` / `Ctrl+Shift+H` switches yaw between world-locked (horizon-locked) and camera-local.
 
-`Insert` / `Ctrl+Shift+U` cycles what happens when you aim down sights. All three start
-the same way - raising the sights swings the view onto the point the reticle was marking,
-so your shot lands where you had it lined up - and they differ in what happens for the
-rest of the aim:
-
-1. **Tracking paused** (default) - the game keeps the camera for as long as the sights are
-   up. The sight picture is exactly the game's, and head movement does nothing until you
-   lower the weapon.
-2. **Tracking on, with reticle correction** (`marker`) - head tracking carries on
-   from the snapped position. The stock crosshair moves with the projected aim direction
-   whenever the game displays it. No extra crosshair is drawn.
-3. **Tracking on, without reticle correction** (`tracked`) - head tracking carries on
-   while the stock crosshair keeps its native position.
-
-The choice is saved to the INI on every press, so it survives a restart, and the mode you
-switched to is named in `HeadTracking.log` beside the game exe.
-
 Every key is remappable in the `[Hotkeys]` section of the mod's INI, and each chord can be
 disabled there independently of its nav-cluster key.
+
+### Aiming down sights
+
+Head tracking stays on while you aim. The weapon stays where your mouse or
+controller points it, so with your head turned it sits off to one side with its
+sights still lined up, and your rounds land where those sights point. Head
+movement is scaled to the zoom, so a scope does not magnify it.
+
+Leaning eases out while the sights are up, because it would move your eye off them.
 
 ## Configuration
 
@@ -194,9 +185,6 @@ WorldSpaceYaw=true
 ; Move the stock crosshair to follow the weapon's aim while your head turns.
 ; No extra reticle is drawn. False leaves the stock position unchanged.
 ShowAimMarker=true
-; What head tracking does while the sights are up: paused, marker, or tracked.
-; Cycled in game with Insert (or Ctrl+Shift+U), which writes the value back here.
-AdsMode=paused
 
 [View]
 ; Field of view in degrees, or 0 to render the game's own. Valid values are 30 to 150.
@@ -222,23 +210,21 @@ LimitZ=0.40
 LimitZBack=0.10
 
 [Hotkeys]
-; Virtual-key codes. Defaults: End, Page Up, Page Down, Insert.
+; Virtual-key codes. Defaults: End, Page Up, Page Down.
 Toggle=0x23
 CycleMode=0x21
 YawMode=0x22
-AdsMode=0x2D
 ; Each chord can be turned off independently of its nav-cluster key.
 ChordToggle=true
 ChordCycleMode=true
 ChordYawMode=true
-ChordAdsMode=true
 
 [Diagnostics]
 ; Dumps the player controller to the log every two seconds. A maintenance
 ; diagnostic: it buries everything else in the log. Leave it false.
 StateProbe=false
 ; Samples the head pose, the aim and where it landed on screen every two
-; seconds. Turn it on only while reporting a misplaced aim marker.
+; seconds. Turn it on only while reporting a misplaced crosshair.
 AimGeometry=false
 ```
 
@@ -292,9 +278,6 @@ and starts the live file empty, so neither grows over time.
 - The log says no tracker packets are arriving. Check OpenTrack is started and its output
   is `127.0.0.1:4242`, or that your phone app has this PC's address and that port.
 - Tracking may be toggled off. Press `End` (or `Ctrl+Shift+Y`).
-- The view does not move while you are aiming: that is the default ADS mode. Press
-  `Insert` (or `Ctrl+Shift+U`) to cycle to one of the two that keep tracking live through
-  an aim.
 
 **Jittery or unstable tracking**
 
@@ -315,13 +298,17 @@ and starts the live file empty, so neither grows over time.
 
 **The stock crosshair stays in the middle when you turn your head**
 
-- Check `ShowAimMarker=true`. With sights raised, choose the `marker` ADS mode
-  to enable correction while tracking continues. Check `HeadTracking.log` for
-  `[crosshair]` messages or a warning about a missing projection.
+- Check `ShowAimMarker=true`. Check `HeadTracking.log` for `[crosshair]` messages or
+  a warning about a missing projection.
 - The game controls whether its crosshair is visible. The mod moves that crosshair
   and draws no replacement when the game hides it.
 - Correction currently follows the aim direction. Positional lean still introduces
   parallax, particularly at close range.
+
+**The weapon is off to one side when I aim down sights**
+
+- Your head is turned: the weapon stays on your aim and you are looking past it. Turn
+  back to it, or move your aim to where you are looking.
 
 **The game window moved when you launched, or after you changed the resolution**
 

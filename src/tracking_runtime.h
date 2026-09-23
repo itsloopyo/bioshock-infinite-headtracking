@@ -1,6 +1,5 @@
 #pragma once
 
-#include "ads.h"
 #include "config.h"
 #include "frame_sample.h"
 
@@ -41,14 +40,8 @@ public:
     void ToggleEnabled();
     void CycleTrackingMode();
     void ToggleYawMode();
-    // paused -> marker -> tracked -> paused, persisted on every press.
-    void CycleAdsMode();
 
     bool IsWorldSpaceYaw() const { return m_worldSpaceYaw.load(std::memory_order_relaxed); }
-
-    // Read once per rendered frame by the camera hook, so a press mid-aim lands on that
-    // aim rather than on the next one.
-    AdsMode GetAdsMode() const { return m_adsMode.load(std::memory_order_relaxed); }
 
 private:
     static constexpr float kMaxFrameDtSec = 0.25f;
@@ -75,7 +68,6 @@ private:
     std::atomic<bool> m_started{false};
     std::atomic<bool> m_enabled{false};
     std::atomic<bool> m_worldSpaceYaw{true};
-    std::atomic<AdsMode> m_adsMode{kDefaultAdsMode};
 };
 
 }  // namespace BioShockInfiniteHeadTracking

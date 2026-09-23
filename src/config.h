@@ -2,7 +2,6 @@
 
 #include <cstdint>
 
-#include "ads.h"
 #include "cameraunlock/data/position_settings.h"
 #include "cameraunlock/math/smoothing_utils.h"
 
@@ -25,13 +24,7 @@ constexpr float kRemoteSmoothing = static_cast<float>(cameraunlock::math::kDefau
 constexpr int   kVkToggle        = 0x23; // VK_END
 constexpr int   kVkCycleMode     = 0x21; // VK_PRIOR (Page Up)
 constexpr int   kVkYawMode       = 0x22; // VK_NEXT (Page Down)
-constexpr int   kVkAdsMode       = 0x2D; // VK_INSERT
 constexpr bool  kChord           = true;
-// What head tracking does while the sights are up. The default is the mode that cannot
-// be wrong: the game keeps the camera for the whole aim, so the sight picture is exactly
-// the game's. The cycle, the value strings and the toast wording are core's - see
-// ads.h.
-constexpr AdsMode kAdsMode       = kDefaultAdsMode;
 
 // Field of view in degrees, or 0 for "leave the game's own field of view alone", which
 // is what ships. The game's only FOV control is a 0-to-1 slider its own config file caps
@@ -80,11 +73,6 @@ struct Config {
     // true = horizon-locked (world-space) yaw, false = camera-local yaw.
     bool world_space_yaw = defaults::kWorldSpaceYaw;
 
-    // What head tracking does while the sights are up: paused -> marker -> tracked.
-    // Cycled in game, and written back to the INI on every press, so the player's choice
-    // survives a restart.
-    AdsMode ads_mode = defaults::kAdsMode;
-
     // Field of view in degrees for an unzoomed frame, or 0 to render the game's own.
     // Applied as a ratio against the camera's unzoomed angle rather than written flat
     // over the frame's, so iron sights, scopes and scripted cameras keep zooming by the
@@ -115,18 +103,11 @@ struct Config {
     int vk_toggle     = defaults::kVkToggle;
     int vk_cycle_mode = defaults::kVkCycleMode;
     int vk_yaw_mode   = defaults::kVkYawMode;
-    int vk_ads_mode   = defaults::kVkAdsMode;
     bool chord_toggle = defaults::kChord;
     bool chord_cycle_mode = defaults::kChord;
     bool chord_yaw_mode = defaults::kChord;
-    bool chord_ads_mode = defaults::kChord;
 
     bool LoadOrCreate(const char* iniPath);
-
-    // Writes just the ADS mode back, leaving every other key and every comment in the
-    // file alone. Called from the hotkey handler, so it goes through the INI path the
-    // last LoadOrCreate used rather than deriving one of its own.
-    static void SaveAdsMode(AdsMode mode);
 };
 
 }  // namespace BioShockInfiniteHeadTracking

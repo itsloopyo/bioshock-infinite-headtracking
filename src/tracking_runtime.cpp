@@ -30,7 +30,6 @@ void TrackingRuntime::Start(const Config& cfg) {
     m_session.SetRemoteSmoothing(m_cfg.remote_smoothing);
 
     m_worldSpaceYaw.store(m_cfg.world_space_yaw, std::memory_order_relaxed);
-    m_adsMode.store(m_cfg.ads_mode, std::memory_order_relaxed);
     m_session.SetMode(m_cfg.position_enabled
                           ? cameraunlock::TrackingMode::RotationAndPosition
                           : cameraunlock::TrackingMode::RotationOnly);
@@ -87,15 +86,6 @@ void TrackingRuntime::CycleTrackingMode() {
             Log::Line("Tracking mode: position only");
             break;
     }
-}
-
-// The mode is read fresh by the camera hook every frame, so nothing has to be
-// invalidated here for a press mid-aim to take effect on that aim.
-void TrackingRuntime::CycleAdsMode() {
-    const AdsMode next = NextAdsMode(m_adsMode.load(std::memory_order_relaxed));
-    m_adsMode.store(next, std::memory_order_relaxed);
-    Config::SaveAdsMode(next);
-    Log::Line("ADS mode: %s", AdsModeValue(next));
 }
 
 void TrackingRuntime::ToggleYawMode() {

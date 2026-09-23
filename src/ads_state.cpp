@@ -23,8 +23,8 @@ namespace {
 // aiming on both bindings.
 
 // Said once. A profile whose zoom offset does not fit this build would otherwise leave
-// the sights permanently down with nothing in the log, and `paused` - the shipped
-// default - would look like it had simply stopped working.
+// the sights permanently down with nothing in the log, and the lean would stay in through
+// every aim with no sign of why.
 void ReportUnreadableOnce(std::size_t offset) {
     static bool reported = false;
     if (reported) {
@@ -46,8 +46,8 @@ bool PlayerIsAiming(const void* playerController) {
     std::uint32_t flags = 0;
     // Through the page check rather than straight off the pointer: this is a fixed offset
     // a build profile supplies, and the contract in ads_state.h is that an unreadable or
-    // absent flag reports "not aiming" - the direction that fails toward the game's own
-    // camera. Without the check a profile whose offset landed past the end of the
+    // absent flag reports "not aiming" - the direction that leaves the lean in. Without
+    // the check a profile whose offset landed past the end of the
     // allocation would take the game down inside the render path.
     if (!ReadProfileField(playerController, offset, &flags)) {
         ReportUnreadableOnce(offset);

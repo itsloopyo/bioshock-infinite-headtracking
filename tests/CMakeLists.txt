@@ -5,14 +5,15 @@ cmake_minimum_required(VERSION 3.20)
 # covered by the in-game checklist, not here.
 
 # Pure arithmetic: the UE3 rotation maths, the head-pose composition, the aim vector the
-# reticle is placed from, the ADS gate, the field-of-view decision and the zoom scale.
+# reticle is placed from, the tracking gate and the ADS lean ease, the field-of-view
+# decision and the zoom scale.
 # No sockets, no registry, no Windows headers beyond what the mod's own headers pull in.
 add_executable(bsi_tests
     test_main.cpp
 )
 
 # The INI: the shipped file's contents, what the reader makes of a hand-edited one, and
-# the single-key ADS write-back. Needs the real config reader and writer.
+# an older build's INI still loading. Needs the real config reader and writer.
 add_executable(bsi_config_tests
     test_config.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../src/config.cpp

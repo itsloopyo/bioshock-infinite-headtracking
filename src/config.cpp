@@ -25,18 +25,6 @@ bool FileExists(const char* path) {
     return GetFileAttributesA(path) != INVALID_FILE_ATTRIBUTES;
 }
 
-// The path the last LoadOrCreate used. SaveAdsMode writes one key back into that same
-// file rather than deriving a path of its own: the caller owns where the INI lives, and
-// two answers to that question is one file the player edits and another the mod writes.
-// Never destroyed, for the reason set out over the globals in dllmain.cpp: a
-// namespace-scope std::string frees its heap in the CRT's DLL_PROCESS_DETACH pass, under
-// the loader lock, after ExitProcess has already terminated this mod's threads wherever
-// they happened to be - including inside the heap lock.
-std::string& IniPathStore() {
-    static std::string* const path = new std::string();
-    return *path;
-}
-
 void WriteGeneralSection(cameraunlock::IniWriter& w) {
     w.WriteSection("General");
     w.WriteBool("EnableOnStartup", kEnableOnStartup);
@@ -47,12 +35,6 @@ void WriteGeneralSection(cameraunlock::IniWriter& w) {
     w.WriteComment(" Move the stock crosshair to follow the weapon's aim while your head turns.");
     w.WriteComment(" No extra reticle is drawn. False leaves the stock position unchanged.");
     w.WriteBool("ShowAimMarker", kShowAimMarker);
-    w.WriteComment(" What head tracking does while the sights are up. Cycled in game with");
-    w.WriteComment(" Insert (or Ctrl+Shift+U), which writes the new value back here.");
-    w.WriteComment("   paused   the game keeps the camera for as long as the sights are up");
-    w.WriteComment("   marker   tracking carries on with stock crosshair position correction");
-    w.WriteComment("   tracked  tracking carries on with the stock crosshair position unchanged");
-    w.WriteString("AdsMode", AdsModeValue(kAdsMode));
     w.WriteBlankLine();
 }
 
@@ -100,16 +82,14 @@ void WritePositionSection(cameraunlock::IniWriter& w) {
 
 void WriteHotkeysSection(cameraunlock::IniWriter& w) {
     w.WriteSection("Hotkeys");
-    w.WriteComment(" Virtual-key codes. Defaults: End (toggle), Page Up (cycle tracking mode), Page Down (yaw mode), Insert (cycle ADS mode).");
+    w.WriteComment(" Virtual-key codes. Defaults: End (toggle), Page Up (cycle tracking mode), Page Down (yaw mode).");
     w.WriteHex("Toggle", kVkToggle);
     w.WriteHex("CycleMode", kVkCycleMode);
     w.WriteHex("YawMode", kVkYawMode);
-    w.WriteHex("AdsMode", kVkAdsMode);
-    w.WriteComment(" Chord alternatives: Ctrl+Shift+Y (toggle), Ctrl+Shift+G (cycle tracking mode), Ctrl+Shift+H (yaw mode), Ctrl+Shift+U (cycle ADS mode).");
+    w.WriteComment(" Chord alternatives: Ctrl+Shift+Y (toggle), Ctrl+Shift+G (cycle tracking mode), Ctrl+Shift+H (yaw mode).");
     w.WriteBool("ChordToggle", kChord);
     w.WriteBool("ChordCycleMode", kChord);
     w.WriteBool("ChordYawMode", kChord);
-    w.WriteBool("ChordAdsMode", kChord);
     w.WriteBlankLine();
 }
 
@@ -124,7 +104,7 @@ void WriteDiagnosticsSection(cameraunlock::IniWriter& w) {
     w.WriteBlankLine();
     w.WriteComment(" Sample the head pose, the aim resolved in the tracked view and the");
     w.WriteComment(" screen position it projected to, once every two seconds. Turn it on");
-    w.WriteComment(" when the aim marker sits in the wrong place and you are reporting it;");
+    w.WriteComment(" when the crosshair sits in the wrong place and you are reporting it;");
     w.WriteComment(" a session of it is thousands of lines, and the startup, tracking and");
     w.WriteComment(" crosshair lines you would otherwise be reading sit between them.");
     w.WriteBool("AimGeometry", kAimGeometryLog);
@@ -336,6 +316,23 @@ void WarnRetiredRecenterKeys(const cameraunlock::IniReader& reader) {
     }
 }
 
+// The aim-down-sights mode cycle, retired. Head tracking now carries on through every
+// aim, so there is no mode to pick and no key to cycle one. Noted rather than warned:
+// an INI written by an older build carries these keys through no choice of the player's,
+// and nothing they could set them to would change what happens.
+void NoteRetiredAdsKeys(const cameraunlock::IniReader& reader) {
+    static const struct { const char* section; const char* key; } kRetired[] = {
+        { "General", "AdsMode" }, { "Hotkeys", "AdsMode" }, { "Hotkeys", "ChordAdsMode" },
+    };
+    for (const auto& entry : kRetired) {
+        if (reader.ReadString(entry.section, entry.key, "").empty()) {
+            continue;
+        }
+        Log::Line("Config key [%s] %s is no longer used and is ignored: head tracking stays "
+                  "on while you aim, with no mode or key for it.", entry.section, entry.key);
+    }
+}
+
 // Every key an existing INI may still set that the mod no longer reads, named once each
 // so the user is not left adjusting a number that does nothing.
 void WarnRetiredKeys(const cameraunlock::IniReader& ini) {
@@ -343,6 +340,7 @@ void WarnRetiredKeys(const cameraunlock::IniReader& ini) {
     WarnRetiredSmoothingKey(ini, "Position", "Smoothing");
     WarnRetiredShapingKeys(ini);
     WarnRetiredRecenterKeys(ini);
+    NoteRetiredAdsKeys(ini);
 }
 
 // GetAsyncKeyState, which the poller polls these with, is defined for virtual-key codes
@@ -398,11 +396,6 @@ bool ReadGeneralSection(const cameraunlock::IniReader& ini, Config& cfg) {
     }
     cfg.world_space_yaw = ReadCheckedBool(ini, "General", "WorldSpaceYaw", kWorldSpaceYaw);
     cfg.show_aim_marker = ReadCheckedBool(ini, "General", "ShowAimMarker", kShowAimMarker);
-    // Anything that is not one of the three values is the DEFAULT rather than whichever
-    // branch happens to be last, which covers a typo in a hand-edited file and is also
-    // the migration path for a mode renamed since an older release wrote the key.
-    cfg.ads_mode = ParseAdsMode(
-        ini.ReadString("General", "AdsMode", AdsModeValue(kAdsMode)).c_str());
     return true;
 }
 
@@ -444,11 +437,9 @@ void ReadHotkeysSection(const cameraunlock::IniReader& ini, Config& cfg) {
     cfg.vk_toggle     = ReadVirtualKey(ini, "Toggle",    kVkToggle);
     cfg.vk_cycle_mode = ReadVirtualKey(ini, "CycleMode", kVkCycleMode);
     cfg.vk_yaw_mode   = ReadVirtualKey(ini, "YawMode",   kVkYawMode);
-    cfg.vk_ads_mode   = ReadVirtualKey(ini, "AdsMode",   kVkAdsMode);
     cfg.chord_toggle     = ReadCheckedBool(ini, "Hotkeys", "ChordToggle",    kChord);
     cfg.chord_cycle_mode = ReadCheckedBool(ini, "Hotkeys", "ChordCycleMode", kChord);
     cfg.chord_yaw_mode   = ReadCheckedBool(ini, "Hotkeys", "ChordYawMode",   kChord);
-    cfg.chord_ads_mode   = ReadCheckedBool(ini, "Hotkeys", "ChordAdsMode",   kChord);
 }
 
 void ReadDiagnosticsSection(const cameraunlock::IniReader& ini, Config& cfg) {
@@ -458,25 +449,7 @@ void ReadDiagnosticsSection(const cameraunlock::IniReader& ini, Config& cfg) {
 
 }  // namespace
 
-void Config::SaveAdsMode(AdsMode mode) {
-    if (IniPathStore().empty()) {
-        Log::Line("WARN: the ADS mode was cycled before any INI was loaded, so it applies "
-                  "for this session but will not survive a restart");
-        return;
-    }
-    // GetPrivateProfileString's writer half, which is the only one that can change one
-    // key of an existing file. IniWriter truncates, so writing this back through it
-    // would throw away every other setting and every comment in the file.
-    if (!WritePrivateProfileStringA("General", "AdsMode", AdsModeValue(mode),
-                                    IniPathStore().c_str())) {
-        Log::Line("WARN: could not save AdsMode to %s (error %lu); the mode applies for "
-                  "this session but will not survive a restart",
-                  IniPathStore().c_str(), GetLastError());
-    }
-}
-
 bool Config::LoadOrCreate(const char* iniPath) {
-    IniPathStore() = iniPath;
     if (!FileExists(iniPath) && !WriteDefaultIni(iniPath)) {
         return false;
     }

@@ -20,14 +20,12 @@ namespace BioShockInfiniteHeadTracking {
 constexpr int kChordToggleKey = 'Y';
 constexpr int kChordCycleModeKey = 'G';
 constexpr int kChordYawModeKey = 'H';
-constexpr int kChordAdsModeKey = 'U';
 
 class Hotkeys {
 public:
     using Action = std::function<void()>;
 
-    bool Start(const Config& cfg, Action onToggle,
-               Action onCycleMode, Action onYawMode, Action onAdsMode);
+    bool Start(const Config& cfg, Action onToggle, Action onCycleMode, Action onYawMode);
     void Stop();
 
 private:

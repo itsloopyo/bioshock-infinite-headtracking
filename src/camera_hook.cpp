@@ -69,15 +69,14 @@ void ShowGameCrosshairOnly() {
     RestoreGameCrosshair();
 }
 
-// The ADS transition and the pose the sights came up on. Touched only from the detour,
-// which the game calls on its own thread while it builds the scene view, so neither
-// needs to be atomic.
+// The lean's ease out of and back into the frame as the sights go up and down. Touched
+// only from the detour, which the game calls on its own thread while it builds the scene
+// view, so it needs no atomics.
 AdsFade g_adsFade;
-AdsEntryPose g_adsEntry;
 
-// Milliseconds from the performance counter rather than GetTickCount64. The ADS ease
+// Milliseconds from the performance counter rather than GetTickCount64. The lean ease
 // runs for about 150 ms and the tick count moves in steps of roughly 15.6, so it would
-// resolve the whole swing onto ten values - visible as stepping at any frame rate above
+// resolve the whole ease onto ten values - visible as stepping at any frame rate above
 // 60. The counter is read once per frame and costs nothing next to the frame it is in.
 unsigned long long NowMs() {
     static const long long frequency = [] {
@@ -108,9 +107,8 @@ struct AimComponents {
 // drift out of agreement with the camera on a combined pose the way a per-axis Euler
 // formula does.
 //
-// `drawMarker` is derived per frame by the caller and never latched: with the sights up
-// the mark belongs on screen in `marker` mode alone, and in the other two the game's own
-// crosshair is the only thing claiming to mark the shot.
+// `drawMarker` is [General] ShowAimMarker. The placement is the same with the sights up
+// as at the hip; whether the game shows its crosshair while aiming is the game's call.
 //
 // The components are handed back as well as stored, so the diagnostic below reports the
 // numbers this frame resolved rather than loading them straight back out of the atomics
@@ -223,57 +221,15 @@ void ReportFirstPoseOnce(const FrameSample& s) {
 }
 
 // Edge-triggered, on the same terms as the gameplay-state line: what the sights do to
-// tracking is the first thing a player asks about, and a line per frame would bury it.
-void LogAdsEdge(bool aiming, AdsMode mode) {
+// the lean is the first thing a player asks about, and a line per frame would bury it.
+void LogAdsEdge(bool aiming) {
     static bool s_aiming = false;
-    static AdsMode s_mode = kDefaultAdsMode;
-    if (aiming == s_aiming && mode == s_mode) {
+    if (aiming == s_aiming) {
         return;
     }
     s_aiming = aiming;
-    s_mode = mode;
-    if (!aiming) {
-        Log::Line("[ads] sights down - easing head tracking back to your head");
-        return;
-    }
-    switch (mode) {
-        case AdsMode::Paused:
-            Log::Line("[ads] sights up - head tracking paused, view settling onto the aim");
-            break;
-        case AdsMode::Marker:
-            Log::Line("[ads] sights up - view settling onto the aim, head tracking carries "
-                      "on from there, stock crosshair correction enabled");
-            break;
-        case AdsMode::Tracked:
-            Log::Line("[ads] sights up - view settling onto the aim, head tracking carries "
-                      "on from there, stock crosshair correction disabled");
-            break;
-    }
-}
-
-// All three modes make the same swing onto the aim, and differ only in where the fade
-// lands: `paused` runs the pose down to nothing and holds it there, the two tracked
-// modes run it into the pose measured from the frame the sights came up on, which is
-// identity at that moment and moves with the head from there. Roll is in neither fade, in
-// any mode - see BlendAdsPose. Both the fade and the entry pose are asked in every mode,
-// so the entry pose is dropped the moment the weapon comes down rather than one aim
-// later.
-FrameSample ShapeForAds(const FrameSample& s, bool aiming, AdsMode mode, float* scaleOut) {
-    const float scale = g_adsFade.Update(aiming, NowMs());
-    *scaleOut = scale;
-    const AdsEntryPose::Pose absolute{ s.pitch, s.yaw, s.roll, s.pos_x, s.pos_y, s.pos_z };
-    const AdsEntryPose::Pose relative = g_adsEntry.Relative(aiming, s.has_rotation,
-                                                            absolute);
-    const AdsEntryPose::Pose blended = BlendAdsPose(mode, scale, absolute, relative);
-
-    FrameSample shaped = s;
-    shaped.pitch = blended.pitch;
-    shaped.yaw   = blended.yaw;
-    shaped.roll  = blended.roll;
-    shaped.pos_x = blended.x;
-    shaped.pos_y = blended.y;
-    shaped.pos_z = blended.z;
-    return shaped;
+    Log::Line(aiming ? "[ads] sights up - easing the lean out, head rotation unchanged"
+                     : "[ads] sights down - easing the lean back in");
 }
 
 void __fastcall Detour(void* thisptr, void* edx, UE3Vector* outLoc, UE3Rotator* outRot) {
@@ -327,54 +283,30 @@ void __fastcall Detour(void* thisptr, void* edx, UE3Vector* outLoc, UE3Rotator* 
     // controller, and the front end is the one place this detour runs with something else
     // on the other end of the pointer.
     const bool aiming = playing && PlayerIsAiming(thisptr);
-    const AdsMode adsMode = tracking->GetAdsMode();
-    const TrackingState ts = DecideTracking(state, s.has_rotation || s.has_position,
-                                            aiming, adsMode);
-    if (!PoseApplies(ts.verdict)) {
+    const TrackingState ts = DecideTracking(state, s.has_rotation || s.has_position, aiming);
+    if (ts.verdict != TrackingVerdict::Active) {
         // A real suppression - menu, level transition, tracker gone, tracking switched
-        // off. The transition and the pose the sights came up on are both dropped, so the
-        // next aim re-enters cleanly instead of resuming against a pose from before it.
+        // off. The lean ease is dropped, so the next frame back starts from the hip.
         g_adsFade.Reset();
-        g_adsEntry.Reset();
         // Nothing injected this frame, so the rendered view IS the aim and the game's own
         // centred crosshair marks the shot.
         ShowGameCrosshairOnly();
         return;
     }
     ReportFirstPoseOnce(s);
-    LogAdsEdge(ts.aiming, adsMode);
+    LogAdsEdge(ts.aiming);
 
-    // Tested here, before anything LATCHES the pose, rather than only inside ApplyHeadPose
-    // at the end of the chain. AdsEntryPose banks the first aiming frame's pose as the
-    // reference the whole aim is measured against, so one non-finite sample on the frame
-    // the sights come up is stored and every later frame subtracts against it - tracking
-    // dead for the rest of that aim in `marker` and `tracked`, with the one-shot warning
-    // already spent on the first frame.
-    if (!PoseIsFinite(s)) {
-        ReportNonFiniteOnce(s, 1.0f);
-        ShowGameCrosshairOnly();
-        return;
-    }
-
-    // The fade's scale comes back out because the crosshair handover is decided on it,
-    // not on the aiming edge - see ShouldDrawAimMarker.
-    float adsScale = 1.0f;
-    const FrameSample shaped = ShapeForAds(s, ts.aiming, adsMode, &adsScale);
+    // The sights put the weapon's sight line through the clean eye. Head rotation turns
+    // the view about that eye and leaves them lined up, so it is never touched here; only
+    // the lean, which moves the eye off that line, is eased out while they are up.
+    const FrameSample shaped = EaseLeanForAds(s, g_adsFade.Update(ts.aiming, NowMs()));
 
     // The engine boundary, and the last thing done to the pose before it is written in.
     // The sights narrow the frame's field of view, which magnifies everything drawn in it
     // including the head pose, so the pose is shrunk by the same ratio and one head
     // degree stays worth the same amount of screen aimed or not. Exactly 1.0 whenever
     // nothing is zooming, so ordinary play is untouched.
-    //
-    // Applied after the ADS shaping rather than before it: the entry pose that `marker`
-    // and `tracked` measure their relative motion against is in the tracker's own
-    // degrees, and the field of view is still animating through the whole transition, so
-    // scaling first would subtract two poses taken at two different factors.
     const FrameSample applied = ScaleForZoom(shaped, zoom.factor);
-
-    const bool drawMarker =
-        ShouldDrawAimMarker(g_showAimMarker, ts.aiming, adsMode, adsScale);
 
     const UE3Rotator clean = *outRot;
     Lean lean;
@@ -384,11 +316,11 @@ void __fastcall Detour(void* thisptr, void* edx, UE3Vector* outLoc, UE3Rotator* 
     // Published for the scene-view hook to place: this detour runs INSIDE CalcSceneView,
     // so the projection matrix the frame will be drawn with has not been written yet. The
     // reticle is drawn from it once that hook has it - see the tail of its detour.
-    const AimComponents aim = PublishAimMarker(clean, *outRot, drawMarker);
+    const AimComponents aim = PublishAimMarker(clean, *outRot, g_showAimMarker);
 
     const bool canPlaceMark =
-        drawMarker && GetAimMarker().projection_valid.load(std::memory_order_acquire);
-    ReportNoProjectionOnce(drawMarker && !canPlaceMark);
+        g_showAimMarker && GetAimMarker().projection_valid.load(std::memory_order_acquire);
+    ReportNoProjectionOnce(g_showAimMarker && !canPlaceMark);
     // Stashed rather than reported here. The screen position is derived from the
     // half-field tangents, and this detour runs INSIDE CalcSceneView, so this frame's are
     // not published yet - reporting now would describe the mark with the PREVIOUS frame's

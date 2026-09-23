@@ -70,9 +70,8 @@ struct ZoomScale {
 // atan(tan(a) * factor), which is only the identity on the open interval either side of
 // vertical: at 95 degrees tan has already crossed its asymptote, so the round trip returns
 // -85 and the view snaps to the opposite side. Core's own contract says the input must be
-// within +/-90 and nothing on this side was enforcing it. Reachable in ordinary play -
-// a tracker profile mapped out past 90 for a look-behind, and the relative pose that
-// `marker` and `tracked` measure from the entry frame, which is bounded to +/-180.
+// within +/-90 and nothing on this side was enforcing it. Reachable in ordinary play:
+// a tracker profile mapped out past 90 for a look-behind.
 constexpr float kMaxScalableAngleDeg = 89.0f;
 
 // The narrowest live angle still taken as a field of view. A scope legitimately renders

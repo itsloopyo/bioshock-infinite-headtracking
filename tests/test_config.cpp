@@ -1,15 +1,14 @@
 // Characterization tests for the INI: what the shipped file contains, what the reader
-// makes of a hand-edited one, and what survives an in-game ADS cycle writing one key back.
+// makes of a hand-edited one, and that a file an older build wrote still loads.
 //
 // The config is the one part of the mod a player edits, so a change of meaning here
 // reaches them as a setting that quietly stopped working. The three things pinned below
 // are the ones with somewhere to go wrong: the defaults are stated in three places
 // (config.h, the writer, the reader's fallbacks) and must agree; the boundary checks turn
 // a typo into the shipped value rather than into a NaN in the view matrix; and
-// SaveAdsMode has to leave every other key and comment in the file alone.
+// keys a retired feature left behind load without failing anything.
 //
-// Windows-only, like test_port_reclaim.cpp: the single-key writer is
-// WritePrivateProfileStringA. Until this repo has a build system, run it from the repo
+// Windows-only, like test_port_reclaim.cpp: the reader is GetPrivateProfileString. Until this repo has a build system, run it from the repo
 // root with
 /*
    g++ -std=c++17 -Isrc -Icameraunlock-core/cpp/include tests/test_config.cpp \
@@ -107,7 +106,6 @@ void TestFreshInstallRoundTripsTheShippedDefaults() {
     CHECK(c.data_freshness_ms == defaults::kDataFreshnessMs);
     CHECK(c.world_space_yaw == defaults::kWorldSpaceYaw);
     CHECK(c.show_aim_marker == defaults::kShowAimMarker);
-    CHECK(c.ads_mode == defaults::kAdsMode);
     CHECK_NEAR(c.fov_override, defaults::kFovOverride);
     CHECK_NEAR(c.local_smoothing, defaults::kLocalSmoothing);
     CHECK_NEAR(c.remote_smoothing, defaults::kRemoteSmoothing);
@@ -120,11 +118,9 @@ void TestFreshInstallRoundTripsTheShippedDefaults() {
     CHECK(c.vk_toggle == defaults::kVkToggle);
     CHECK(c.vk_cycle_mode == defaults::kVkCycleMode);
     CHECK(c.vk_yaw_mode == defaults::kVkYawMode);
-    CHECK(c.vk_ads_mode == defaults::kVkAdsMode);
     CHECK(c.chord_toggle == defaults::kChord);
     CHECK(c.chord_cycle_mode == defaults::kChord);
     CHECK(c.chord_yaw_mode == defaults::kChord);
-    CHECK(c.chord_ads_mode == defaults::kChord);
 
     // Every section the reader looks in has to be in the file it wrote, or a key added
     // later lands in a section that is not there.
@@ -147,7 +143,6 @@ void TestReloadIsIdempotent() {
     CHECK(second.LoadOrCreate(IniPath()));
     CHECK(ReadIni() == written);
     CHECK(second.udp_port == first.udp_port);
-    CHECK(second.ads_mode == first.ads_mode);
     CHECK_NEAR(second.remote_smoothing, first.remote_smoothing);
     std::remove(IniPath());
 }
@@ -159,7 +154,6 @@ void TestHandEditedValuesAreRead() {
              "DataFreshnessMs=250\n"
              "WorldSpaceYaw=false\n"
              "ShowAimMarker=false\n"
-             "AdsMode=tracked\n"
              "[View]\n"
              "Fov=95\n"
              "[Smoothing]\n"
@@ -177,7 +171,6 @@ void TestHandEditedValuesAreRead() {
              "Toggle=0x70\n"
              "CycleMode=0x71\n"
              "YawMode=0x72\n"
-             "AdsMode=0x73\n"
              "ChordToggle=false\n");
     Config c;
     CHECK(c.LoadOrCreate(IniPath()));
@@ -186,7 +179,6 @@ void TestHandEditedValuesAreRead() {
     CHECK(c.data_freshness_ms == 250);
     CHECK(!c.world_space_yaw);
     CHECK(!c.show_aim_marker);
-    CHECK(c.ads_mode == AdsMode::Tracked);
     CHECK_NEAR(c.fov_override, 95.0f);
     CHECK_NEAR(c.local_smoothing, 0.25f);
     CHECK_NEAR(c.remote_smoothing, 0.4f);
@@ -199,7 +191,6 @@ void TestHandEditedValuesAreRead() {
     CHECK(c.vk_toggle == 0x70);
     CHECK(c.vk_cycle_mode == 0x71);
     CHECK(c.vk_yaw_mode == 0x72);
-    CHECK(c.vk_ads_mode == 0x73);
     CHECK(!c.chord_toggle);
     CHECK(c.chord_cycle_mode);
     std::remove(IniPath());
@@ -222,7 +213,6 @@ void TestPortOutOfRangeFailsTheLoad() {
 void TestOutOfRangeValuesFallBackToTheDefaults() {
     WriteIni("[General]\n"
              "DataFreshnessMs=-5\n"
-             "AdsMode=nonsense\n"
              "[View]\n"
              "Fov=200\n"
              "[Smoothing]\n"
@@ -235,7 +225,6 @@ void TestOutOfRangeValuesFallBackToTheDefaults() {
     Config c;
     CHECK(c.LoadOrCreate(IniPath()));
     CHECK(c.data_freshness_ms == defaults::kDataFreshnessMs);
-    CHECK(c.ads_mode == defaults::kAdsMode);
     // Clamped into the range that has a projection, which is what someone typing 200 is
     // asking for.
     CHECK_NEAR(c.fov_override, defaults::kMaxFovOverride);
@@ -272,28 +261,37 @@ void TestLimitYDownFollowsLimitYWhenUnset() {
     std::remove(IniPath());
 }
 
-// The ADS mode is cycled in game and written back on every press. IniWriter truncates, so
-// this one key has to go through the single-key path or the player loses every other
-// setting and every comment in the file.
-void TestSaveAdsModeKeepsTheRestOfTheFile() {
-    std::remove(IniPath());
+// The aim-down-sights mode cycle is retired. An INI written while it existed still carries
+// its keys, and it must load exactly as it would without them: nothing fails, the other
+// bindings are read as written, and a freshly written file no longer mentions them.
+void TestAnIniWithTheRetiredAdsKeysStillLoads() {
+    WriteIni("[General]\n"
+             "Port=5555\n"
+             "AdsMode=marker\n"
+             "[Hotkeys]\n"
+             "Toggle=0x70\n"
+             "CycleMode=0x71\n"
+             "YawMode=0x72\n"
+             "AdsMode=0x2D\n"
+             "ChordAdsMode=true\n"
+             "ChordToggle=false\n");
     Config c;
     CHECK(c.LoadOrCreate(IniPath()));
-    const std::string before = ReadIni();
-    CHECK(before.find("AdsMode") != std::string::npos);
+    CHECK(c.udp_port == 5555);
+    CHECK(c.vk_toggle == 0x70);
+    CHECK(c.vk_cycle_mode == 0x71);
+    CHECK(c.vk_yaw_mode == 0x72);
+    CHECK(!c.chord_toggle);
+    CHECK(c.chord_cycle_mode);
+    CHECK(c.chord_yaw_mode);
 
-    Config::SaveAdsMode(AdsMode::Marker);
-    const std::string after = ReadIni();
-    CHECK(after.find("[Hotkeys]") != std::string::npos);
-    CHECK(after.find("[Position]") != std::string::npos);
-    CHECK(after.find("LimitZBack") != std::string::npos);
-    // The comment block above the key is what tells the player what the three values
-    // mean, and a truncating writer would take it with everything else.
-    CHECK(after.find("paused   the game keeps the camera") != std::string::npos);
-
-    Config reloaded;
-    CHECK(reloaded.LoadOrCreate(IniPath()));
-    CHECK(reloaded.ads_mode == AdsMode::Marker);
+    std::remove(IniPath());
+    Config fresh;
+    CHECK(fresh.LoadOrCreate(IniPath()));
+    const std::string text = ReadIni();
+    CHECK(text.find("AdsMode") == std::string::npos);
+    CHECK(text.find("Insert") == std::string::npos);
+    CHECK(text.find("Ctrl+Shift+U") == std::string::npos);
     std::remove(IniPath());
 }
 
@@ -429,7 +427,7 @@ int main() {
     TestOutOfRangeValuesFallBackToTheDefaults();
     TestFovOffAndNegativeBothRenderTheGamesOwn();
     TestLimitYDownFollowsLimitYWhenUnset();
-    TestSaveAdsModeKeepsTheRestOfTheFile();
+    TestAnIniWithTheRetiredAdsKeysStillLoads();
     TestADecimalCommaIsRefusedRatherThanTruncated();
     TestATrailingCommentOnAFloatIsRefused();
     TestNonFiniteValuesFallBackToTheDefaults();

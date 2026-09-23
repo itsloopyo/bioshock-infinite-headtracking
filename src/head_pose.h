@@ -26,10 +26,6 @@ struct Lean {
 // own out-parameters, so this is the boundary worth validating at: a NaN in the rotator
 // or in the camera's world position renders a black frame, and the camera-local branch
 // would carry it into lround, which is undefined for one.
-//
-// Exposed rather than kept inside ApplyHeadPose because the ADS entry pose latches a
-// sample BEFORE this point, and a non-finite one banked there poisons every later frame
-// of that aim.
 inline bool PoseIsFinite(const FrameSample& s) {
     return std::isfinite(s.yaw) && std::isfinite(s.pitch) && std::isfinite(s.roll) &&
            std::isfinite(s.pos_x) && std::isfinite(s.pos_y) && std::isfinite(s.pos_z);
