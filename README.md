@@ -167,8 +167,10 @@ starts.
 
 Head tracking stays on while you aim. The weapon stays where your mouse or
 controller points it, so with your head turned it sits off to one side with its
-sights still lined up, and your rounds land where those sights point. Head
-movement is scaled to the zoom, so a scope does not magnify it.
+sights still lined up, and your rounds land where those sights point. While the
+game renders a narrower field of view than its unzoomed one, the mod scales yaw,
+pitch and the lean by the ratio of the two fields' half-angle tangents, which is
+meant to keep a head movement worth the same distance on screen as it is unzoomed.
 
 Leaning eases out while the sights are up, because it would move your eye off them.
 

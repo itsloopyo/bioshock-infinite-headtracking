@@ -3,13 +3,11 @@
 ## [Unreleased]
 
 ### Added
-- Added crosshair suppression: the game's own crosshair is switched off on the frames the mod is marking the shot itself, and switched back on for every other frame, so there is one reticle on screen and it is the one that says where the round goes.
 - Added window centring when playing windowed. BioShock Infinite opens its window against the top-left corner of the screen and leaves it there; the mod re-centres it on the monitor it is on whenever the game gives the window a new size, so a resolution change in the options menu is centred too. A window that fills the screen, one the game centred itself, and one you have dragged somewhere yourself are all left where they are.
-- Added zoom compensation, so raising the sights no longer makes head tracking feel more sensitive. Yaw, pitch and the lean are scaled by the ratio of the half-field tangents, so a head movement shifts the picture by the same amount on screen whatever field of view the game is rendering. Roll is left alone.
+- Added zoom compensation. While the game renders a narrower field of view than its unzoomed one, yaw, pitch and the lean are scaled by the ratio of the two half-field tangents, which is meant to keep a head movement worth the same distance on screen whatever field of view the game is rendering. Roll is left alone.
 - Head tracking for BioShock Infinite over the OpenTrack UDP protocol, with rotation and position applied to the rendered view only, so aim, shots and game logic keep the game's own camera.
-- Hotkeys on the nav cluster and on Ctrl+Shift chords: toggle tracking, cycle tracking mode (full, rotation only, position only), toggle world-locked or camera-local yaw, and cycle ADS mode.
-- Three aim-down-sights modes: tracking paused, tracking on with an aim marker drawn along the direction the weapon is pointing, and tracking on with no marker. The choice is saved to the INI on every press.
-- Aim marker drawn over the frame, placed from the projection the frame was really drawn with, so it is right on any display shape including ultrawide.
+- Hotkeys on the nav cluster and on Ctrl+Shift chords: toggle tracking, cycle tracking mode (full, rotation only, position only) and toggle world-locked or camera-local yaw.
+- The game's own crosshair is moved to follow the aim, placed from the projection the frame was really drawn with, so it is right on any display shape including ultrawide. The mod draws no reticle of its own.
 - Field of view override in the INI, applied to the rendered frame only, with the angles written to HeadTracking.log.
 - Per-build fingerprinting, so the mod stays dormant on a game build it does not recognise.
 - HeadTracking.log beside the game exe, holding the launch in progress and nothing else: each launch keeps the one before it as HeadTracking.prev.log and starts the live file empty, so neither file grows over a session or across sessions.
