@@ -68,3 +68,6 @@ Makefile text eol=lf
 *.lib binary
 *.a binary
 *.o binary
+
+# Byte-exact test data: the config differential test reads these files as a player's own.
+tests/config_differential/data/** -text

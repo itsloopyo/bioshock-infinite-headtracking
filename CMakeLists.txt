@@ -45,6 +45,7 @@ set(MOD_SOURCES
     src/game_crosshair.cpp
     src/game_state.cpp
     src/hotkeys.cpp
+    src/legacy_config/legacy_config.cpp
     src/path_utils.cpp
     src/scene_view.cpp
     src/state_probe.cpp
