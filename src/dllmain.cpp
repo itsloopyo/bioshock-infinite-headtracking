@@ -94,6 +94,15 @@ const char* Describe(Liveness state, unsigned long renderDelta, unsigned long ot
                           "this PC's address and that port.", renderDelta, port);
             return buf;
         case Liveness::Disabled:
+            if (toggleKeys[0] == '\0') {
+                std::snprintf(buf, bufLen,
+                              "Status: tracking is switched OFF. %lu frames were rendered "
+                              "through the hook and no head pose was applied to any of them. "
+                              "ToggleKey is empty, so no key switches it on: set "
+                              "EnableOnStartup=true or bind a key in ToggleKey.",
+                              renderDelta);
+                return buf;
+            }
             std::snprintf(buf, bufLen,
                           "Status: tracking is switched OFF. %lu frames were rendered "
                           "through the hook and no head pose was applied to any of them. "
