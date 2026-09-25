@@ -72,10 +72,10 @@ void MapLegacy(const legacy::Config& c, Config& out, std::vector<DroppedValue>& 
 }
 
 ImportResult RunLegacyImport(const LegacyInput& input, Config& out) {
-    // The path the published build handed GetPrivateProfileString: the folder in the ANSI
-    // code page, or its 8.3 alias when the code page cannot spell it. With neither, that
-    // build never read a file there - it stayed dormant before looking - so there is no
-    // setting of the player's to carry.
+    // The path the published build handed its INI reader: the folder in the ANSI code
+    // page, or its 8.3 alias when the code page cannot spell it. With neither, that build
+    // never read a file there - it stayed dormant before looking - so there is no setting
+    // of the player's to carry.
     const std::size_t slash = input.path.find_last_of(L"\\/");
     const std::string folder = AnsiFolderPath(input.path.substr(0, slash + 1));
     std::vector<DroppedValue> dropped;
