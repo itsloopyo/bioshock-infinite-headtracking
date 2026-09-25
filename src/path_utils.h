@@ -13,10 +13,9 @@ std::wstring GetModuleDirectoryW();
 // Wide path to a file beside this DLL. Empty when the directory is unknown.
 std::wstring GetModulePathW(const char* filename);
 
-// Narrow form of the same path, for the core APIs that take std::string. Empty
-// when the directory is unknown, or when the path does not survive the ANSI
-// codepage - callers must not fall back to a bare filename, which
-// GetPrivateProfileString would resolve against the Windows directory.
-std::string GetModulePath(const char* filename);
+// A folder, with its trailing separator, as the pre-canonical builds handed it to
+// GetPrivateProfileString: in the ANSI code page, or as its 8.3 alias when the code page
+// cannot spell it. Empty when neither works, where those builds read no file at all.
+std::string AnsiFolderPath(const std::wstring& folder);
 
 }  // namespace BioShockInfiniteHeadTracking

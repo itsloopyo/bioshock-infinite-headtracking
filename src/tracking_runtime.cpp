@@ -30,9 +30,9 @@ void TrackingRuntime::Start(const Config& cfg) {
     m_session.SetRemoteSmoothing(m_cfg.remote_smoothing);
 
     m_worldSpaceYaw.store(m_cfg.world_space_yaw, std::memory_order_relaxed);
-    m_session.SetMode(m_cfg.position_enabled
-                          ? cameraunlock::TrackingMode::RotationAndPosition
-                          : cameraunlock::TrackingMode::RotationOnly);
+    // The config table never hands over a pair that names no mode: both false reads as
+    // both defaults.
+    m_session.SetMode(cameraunlock::DecodeTrackingMode(m_cfg.rotation_enabled, m_cfg.position_enabled).value());
 
     m_receiver.SetLog([](const std::string& msg) {
         Log::Line("UDP: %s", msg.c_str());
@@ -46,7 +46,7 @@ void TrackingRuntime::Start(const Config& cfg) {
     // written at the top of this function. A relaxed store publishes no ordering, so
     // that read would be a data race on non-atomic memory; the release pairs with the
     // acquire in SampleFrame and makes every write above visible before it.
-    m_enabled.store(m_cfg.enabled_on_startup, std::memory_order_release);
+    m_enabled.store(m_cfg.enable_on_startup, std::memory_order_release);
 
     if (m_receiver.Start(m_cfg.udp_port)) {
         Log::Line("UDP receiver listening on port %u", m_cfg.udp_port);
@@ -74,8 +74,9 @@ void TrackingRuntime::ToggleEnabled() {
     Log::Line("Tracking %s", !prev ? "enabled" : "disabled");
 }
 
-void TrackingRuntime::CycleTrackingMode() {
-    switch (m_session.CycleMode()) {
+cameraunlock::TrackingMode TrackingRuntime::CycleTrackingMode() {
+    const cameraunlock::TrackingMode mode = m_session.CycleMode();
+    switch (mode) {
         case cameraunlock::TrackingMode::RotationAndPosition:
             Log::Line("Tracking mode: rotation + position (6DOF)");
             break;
@@ -86,12 +87,14 @@ void TrackingRuntime::CycleTrackingMode() {
             Log::Line("Tracking mode: position only");
             break;
     }
+    return mode;
 }
 
-void TrackingRuntime::ToggleYawMode() {
+bool TrackingRuntime::ToggleYawMode() {
     const bool prev = m_worldSpaceYaw.load(std::memory_order_relaxed);
     m_worldSpaceYaw.store(!prev, std::memory_order_relaxed);
     Log::Line("Yaw mode: %s", !prev ? "world-space (horizon-locked)" : "camera-local");
+    return !prev;
 }
 
 bool TrackingRuntime::IsPoseFresh() const {

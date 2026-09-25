@@ -154,8 +154,14 @@ Two equivalent binding sets - use whichever your keyboard has:
 
 `Page Down` / `Ctrl+Shift+H` switches yaw between world-locked (horizon-locked) and camera-local.
 
-Every key is remappable in the `[Hotkeys]` section of the mod's INI, and each chord can be
-disabled there independently of its nav-cluster key.
+Each hotkey in the `[Hotkeys]` section of `HeadTracking.ini` is a list of the keys that
+trigger it, the chord included, so any of them can be changed or removed on its own:
+`ToggleKey=End, Ctrl+Shift+Y`.
+
+The tracking mode and the yaw mode are saved to `HeadTracking.ini` the moment you switch
+them, so the game starts in the one you left it in. `End` / `Ctrl+Shift+Y` switches
+tracking for this session only; `EnableOnStartup` decides whether it is on when the game
+starts.
 
 ### Aiming down sights
 
@@ -168,65 +174,98 @@ Leaning eases out while the sights are up, because it would move your eye off th
 
 ## Configuration
 
-Settings live in `HeadTracking.ini`, written into `Binaries\Win32\` next to the game exe
-the first time the mod runs. A key missing from the file falls back to its default, so an
-INI written by an older build keeps working and simply picks up the defaults for anything
-new.
+<!-- cameraunlock:config -->
+The mod reads its settings from `Binaries\Win32\HeadTracking.ini` in the game folder, and creates the file when it starts and finds none. Edit it with any text editor.
+
+Earlier versions of the mod used an older layout for this file. The first time this version starts, it converts the file once into the layout below and keeps the file as it was beside it as `HeadTracking.ini.pre-canonical`. `HeadTracking.ini.pre-canonical.last`, when present, is the file as it was before the most recent conversion: the mod converts the file again when it finds the older layout later, for example after an older version of the mod rewrote it.
+
+Comments, and keys the mod never read, are not carried over. Nor are these, where your old file had them:
+
+- Reticle settings, and a key that toggled the reticle.
+- A sensitivity, scale, deadzone, response curve or axis inversion you changed from its default. Set these in your tracker instead.
+- The setting for a feature that earlier versions shipped switched off while it was untested. It now follows the mod's default.
+
+An older version of the mod may not read the new layout correctly. It reads a key that moved as its own default, and it can misread a hotkey or another value that is now written as a name. To go back to an older version, first copy `HeadTracking.ini.pre-canonical` back over `HeadTracking.ini`, which restores the old file.
+
+With every setting at its default, the file reads:
 
 ```ini
-[General]
-EnableOnStartup=true
-; UDP port the mod listens on for OpenTrack pose data.
-Port=4242
-; Pose older than this is treated as stale, and the view holds where it was.
-DataFreshnessMs=500
-; Yaw mode: true = horizon-locked yaw (default), false = camera-local.
-WorldSpaceYaw=true
-; Move the stock crosshair to follow the weapon's aim while your head turns.
-; No extra reticle is drawn. False leaves the stock position unchanged.
-ShowAimMarker=true
+; BioShock Infinite head tracking settings.
+; Comments start with ; and go on their own line. Text after a value is part of the value.
+; Hotkeys are key names such as End, PageUp or Ctrl+Shift+Y. Separate several with commas; leave empty for none.
 
-[View]
-; Field of view in degrees, or 0 to render the game's own. Valid values are 30 to 150.
-Fov=0
+[CameraUnlock]
+; Written by the mod. Leave this section in place.
+ConfigFormat=1
+
+[Network]
+; UDP port the mod receives tracker data on (OpenTrack protocol).
+UdpPort=4242
+
+[General]
+; true: head tracking is on when the game starts. ToggleKey turns it on and off.
+EnableOnStartup=true
+; true: yaw turns around the world's up axis. false: around the camera's own up axis.
+WorldSpaceYaw=true
+; true: turning your head turns the view.
+; Tracking mode at startup, with PositionEnabled. The mode hotkey changes both.
+RotationEnabled=true
+; Milliseconds a tracker packet stays current. Once the tracker has sent nothing
+; for this long, the mod stops following it until data arrives again.
+DataFreshnessMs=500
 
 [Smoothing]
-; 0.0 (responsive) to 1.0 (heavy). Covers rotation and position. Which value
-; applies is picked per connection from the packet source address: loopback
-; gets LocalSmoothing, anything else gets RemoteSmoothing.
+; Smoothing when the tracker runs on this PC. 0 is the least, 1 the most.
 LocalSmoothing=0.0
+; Smoothing when the tracker is another device on the network, such as a phone.
+; 0 is the least, 1 the most.
 RemoteSmoothing=0.15
 
 [Position]
-; 6DOF positional tracking. The limits are meters of head travel, not a
-; sensitivity: they bound how far the view may lean.
-Enabled=true
-LimitX=0.30
-; Vertical travel is clamped to [-LimitYDown, +LimitY].
-LimitY=0.20
-LimitYDown=0.20
-; Asymmetric: more room to lean forward than to pull back through your own body.
-LimitZ=0.40
-LimitZBack=0.10
+; true: moving your head moves the view.
+; Tracking mode at startup, with RotationEnabled. The mode hotkey changes both.
+PositionEnabled=true
+; How far, in metres, leaning left or right can move the view.
+PositionLimitX=0.3
+; How far, in metres, raising your head can move the view.
+PositionLimitY=0.2
+; How far, in metres, lowering your head can move the view.
+PositionLimitYDown=0.2
+; How far, in metres, leaning forward can move the view.
+PositionLimitZ=0.4
+; How far, in metres, leaning back can move the view.
+PositionLimitZBack=0.1
 
 [Hotkeys]
-; Virtual-key codes. Defaults: End, Page Up, Page Down.
-Toggle=0x23
-CycleMode=0x21
-YawMode=0x22
-; Each chord can be turned off independently of its nav-cluster key.
-ChordToggle=true
-ChordCycleMode=true
-ChordYawMode=true
+; Turns head tracking on and off.
+ToggleKey=End, Ctrl+Shift+Y
+; Changes the tracking mode: rotation and position, rotation only, position only.
+CycleTrackingModeKey=PageUp, Ctrl+Shift+G
+; Switches yaw between the world's up axis and the camera's own (WorldSpaceYaw).
+YawModeKey=PageDown, Ctrl+Shift+H
+
+[View]
+; Field of view in degrees for a frame the game is not zooming, or 0 for the game's own.
+; 0, or 30 to 150. It is the horizontal angle on a 16:9 display. Iron sights, scopes and
+; scripted cameras still zoom by the factor they always did, and shots, traces and aim
+; assist keep the game's own angle.
+Fov=0.0
 
 [Diagnostics]
-; Dumps the player controller to the log every two seconds. A maintenance
-; diagnostic: it buries everything else in the log. Leave it false.
+; true: write the player controller to HeadTracking.log every two seconds. It buries
+; everything else in the log; leave it false unless you were asked to turn it on.
 StateProbe=false
-; Samples the head pose, the aim and where it landed on screen every two
-; seconds. Turn it on only while reporting a misplaced crosshair.
+; true: write the head pose, the aim and where the crosshair was placed to
+; HeadTracking.log every two seconds, for a report of a misplaced crosshair.
 AimGeometry=false
 ```
+<!-- /cameraunlock:config -->
+
+Earlier versions read `[General] ShowAimMarker`, which could stop the game's crosshair
+following your aim. It is gone: the crosshair always follows the aim now, and the
+conversion leaves the key out. Each hotkey was a virtual-key code with a separate chord
+switch (`Toggle=0x23`, `ChordToggle=true`); the conversion writes both into one key list
+(`ToggleKey=End, Ctrl+Shift+Y`).
 
 Pose shaping belongs to the tracker. Set sensitivity, deadzones, response curves and axis
 inversion once in OpenTrack or your phone app, and one profile then behaves the same in
@@ -237,8 +276,8 @@ every game.
 World-locked yaw keeps head yaw on the world up-axis however the camera is pitched, so
 looking at the floor and turning your head pans across it. Camera-local yaw turns about
 the camera's own up-axis instead, which leans and rolls the view at steep pitches.
-`Page Down` / `Ctrl+Shift+H` switches between the two at any time; the INI value is the
-mode the mod starts in.
+`Page Down` / `Ctrl+Shift+H` switches between the two at any time and saves the choice to
+`WorldSpaceYaw`, the mode the mod starts in.
 
 ### Field of view
 
@@ -298,8 +337,8 @@ and starts the live file empty, so neither grows over time.
 
 **The stock crosshair stays in the middle when you turn your head**
 
-- Check `ShowAimMarker=true`. Check `HeadTracking.log` for `[crosshair]` messages or
-  a warning about a missing projection.
+- Check `HeadTracking.log` for `[crosshair]` messages or a warning about a missing
+  projection.
 - The game controls whether its crosshair is visible. The mod moves that crosshair
   and draws no replacement when the game hides it.
 - Correction currently follows the aim direction. Positional lean still introduces
@@ -326,7 +365,9 @@ Download the new release and run `install.cmd` again. It overwrites the DLL and 
 ## Uninstalling
 
 Run `uninstall.cmd`. It removes the mod DLL, restores any `xinput1_3.dll.backup` it made,
-and deletes `HeadTracking.ini`, `HeadTracking.log` and `HeadTracking.prev.log`. This mod
+and deletes `HeadTracking.log` and `HeadTracking.prev.log`. It leaves `HeadTracking.ini`,
+and its `.pre-canonical` copies, in place, so your settings are still there if you install
+the mod again; delete them by hand for a clean removal. This mod
 has no separate mod loader, so `uninstall.cmd /force`, which is what removes a loader the
 installer did not put there, has nothing extra to take away here. Deleting
 `Binaries\Win32\xinput1_3.dll` by hand does the same job.

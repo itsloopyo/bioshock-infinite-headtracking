@@ -22,7 +22,6 @@
 #include "ads.h"
 #include "ads_gate.h"
 #include "config.h"
-#include "hotkeys.h"
 #include "fov_override.h"
 #include "head_pose.h"
 #include "hud_projection.h"
@@ -72,18 +71,6 @@ FrameSample MakeSample(float yaw, float pitch, float roll, float x, float y, flo
     s.pos_y = y;
     s.pos_z = z;
     return s;
-}
-
-// The nav-cluster half of the bindings. Insert is free: it carried the retired ADS mode
-// cycle, and nothing takes its place.
-void TestNavClusterDefaults() {
-    CHECK(defaults::kVkToggle == 0x23);     // VK_END
-    CHECK(defaults::kVkCycleMode == 0x21);  // VK_PRIOR
-    CHECK(defaults::kVkYawMode == 0x22);    // VK_NEXT
-    const Config c;
-    for (const int vk : { c.vk_toggle, c.vk_cycle_mode, c.vk_yaw_mode }) {
-        CHECK(vk != 0x2D);  // VK_INSERT
-    }
 }
 
 // ---- ads lean easing (ads.h) -----------------------------------------------
@@ -230,7 +217,7 @@ void TestFovOffLeavesTheGameAngleAlone() {
         CHECK(d.status == FovOverrideStatus::Off);
         CHECK_NEAR(d.fov, 70.0f, 1e-4f);
     }
-    CHECK(defaults::kFovOverride == 0.0f);
+    CHECK(Config{}.fov_override == 0.0f);
 }
 
 // An unzoomed frame renders at exactly the configured number, which is what the INI
@@ -987,20 +974,6 @@ void TestZoomScaleStillEngagesThroughANarrowScope() {
     CHECK(scoped.factor < 1.0f);
 }
 
-// The nav-cluster codes are pinned above; these are the other half of the same binding.
-// AGENTS.md fixes the cluster order so the same action lands on the same chord in every
-// mod, and a reshuffle here is invisible to every other test.
-void TestChordLettersMatchTheFleetOrder() {
-    CHECK(kChordToggleKey    == 'Y');
-    CHECK(kChordCycleModeKey == 'G');
-    CHECK(kChordYawModeKey   == 'H');
-    // Ctrl+Shift+T was the recenter chord before mods stopped keeping a centre, and it
-    // stays free so muscle memory cannot fire something else.
-    CHECK(kChordToggleKey    != 'T');
-    CHECK(kChordCycleModeKey != 'T');
-    CHECK(kChordYawModeKey   != 'T');
-}
-
 void TestHudProjectionAccountsForReticleDepth() {
     const float parent[16] = {1,0,0,0, 0,1,0,0, 0,0,1,0, 12800,7200,0,1};
     float world[16] = {1,0,0,0, 0,1,0,0, 0,0,1,0, 12800,7200,1000,1};
@@ -1032,8 +1005,6 @@ void TestHudProjectionHandlesTransformedParents() {
 }
 
 int main() {
-    TestNavClusterDefaults();
-    TestChordLettersMatchTheFleetOrder();
 
     TestAdsHipPassesThePoseThroughUntouched();
     TestAdsSightsUpKeepRotationAndDropTheLean();

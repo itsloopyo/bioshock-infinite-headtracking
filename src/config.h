@@ -1,113 +1,97 @@
 #pragma once
 
 #include <cstdint>
+#include <string>
+#include <string_view>
 
+#include "cameraunlock/config/config_concepts.g.h"
+#include "cameraunlock/config/config_table.h"
+#include "cameraunlock/config/legacy_import.h"
+#include "cameraunlock/config/value_codecs.h"
 #include "cameraunlock/data/position_settings.h"
 #include "cameraunlock/math/smoothing_utils.h"
 
 namespace BioShockInfiniteHeadTracking {
 
-// The shipped defaults, in one place. WriteDefaultIni writes these, LoadOrCreate
-// falls back to them, and Config's members are initialised from them, so a
-// default-constructed Config, a freshly written INI and a read of a key that is
-// missing from the file cannot disagree about what the default is.
-namespace defaults {
-constexpr bool  kEnableOnStartup = true;
-constexpr int   kPort            = 4242;
-constexpr int   kMinPort         = 1024;
-constexpr int   kMaxPort         = 65535;
-constexpr int   kDataFreshnessMs = 500;
-constexpr bool  kWorldSpaceYaw   = true;
-constexpr bool  kShowAimMarker   = true;
-constexpr float kLocalSmoothing  = static_cast<float>(cameraunlock::math::kDefaultLocalSmoothing);
-constexpr float kRemoteSmoothing = static_cast<float>(cameraunlock::math::kDefaultRemoteSmoothing);
-constexpr int   kVkToggle        = 0x23; // VK_END
-constexpr int   kVkCycleMode     = 0x21; // VK_PRIOR (Page Up)
-constexpr int   kVkYawMode       = 0x22; // VK_NEXT (Page Down)
-constexpr bool  kChord           = true;
-
-// Field of view in degrees, or 0 for "leave the game's own field of view alone", which
-// is what ships. The game's only FOV control is a 0-to-1 slider its own config file caps
-// at 15 percent of the angle already being rendered (see fov_override.h), so anything
-// wider than that has to come from here.
-constexpr float kFovOverride    = 0.0f;
-// A configured angle outside this is a typo rather than a preference: below 30 the frame
-// is a telescope, and tan(fov/2) runs away as 180 approaches. Same range, same key name
-// and same 0-is-off as the other shooters in the fleet, so a player who has set it in
-// one finds it here.
-constexpr float kMinFovOverride = 30.0f;
-constexpr float kMaxFovOverride = 150.0f;
-
-// The state probe writes several kilobytes a second, so it is off in every shipped
-// INI. It is the tool for finding the field that separates gameplay from a menu on a
-// build whose layout has moved - turned on for one session, then off again.
-constexpr bool  kStateProbe      = false;
-
-// The aim-geometry sample is a line every two seconds for as long as the mod is
-// injecting, so it is off in every shipped INI as well. It is what settles a "the mark
-// is in the wrong place" report, and it is only wanted while someone is settling one.
-constexpr bool  kAimGeometryLog  = false;
-
-constexpr bool  kPositionEnabled = true;
-constexpr float kPosLimitX       = cameraunlock::PositionSettings{}.limit_x;
-constexpr float kPosLimitY       = cameraunlock::PositionSettings{}.limit_y;
-constexpr float kPosLimitYDown   = cameraunlock::PositionSettings{}.limit_y_down;
-constexpr float kPosLimitZ       = cameraunlock::PositionSettings{}.limit_z;
-constexpr float kPosLimitZBack   = cameraunlock::PositionSettings{}.limit_z_back;
-}  // namespace defaults
-
+// The settings, as HeadTracking.ini holds them. The member initialisers are the defaults:
+// the table below renders them into the file the mod creates at first launch, and a key
+// missing from the file reads as its member's initialiser.
 struct Config {
-    bool  enabled_on_startup = defaults::kEnableOnStartup;
-    uint16_t udp_port = static_cast<uint16_t>(defaults::kPort);
-
-    // Smoothing is picked per connection from the packet source address: a
-    // tracker on this machine (loopback) uses local_smoothing, a remote network
-    // device uses remote_smoothing. Both cover rotation and position.
-    float local_smoothing = defaults::kLocalSmoothing;
-    float remote_smoothing = defaults::kRemoteSmoothing;
-
-    // Move the stock crosshair with the projected aim direction.
-    bool show_aim_marker = defaults::kShowAimMarker;
-    int  data_freshness_ms = defaults::kDataFreshnessMs;
-
+    std::uint16_t udp_port = 4242;
+    bool enable_on_startup = true;
     // true = horizon-locked (world-space) yaw, false = camera-local yaw.
-    bool world_space_yaw = defaults::kWorldSpaceYaw;
+    bool world_space_yaw = true;
+    int data_freshness_ms = 500;
+
+    // Picked per connection from the packet source address: a tracker on this machine
+    // (loopback) uses local_smoothing, anything else remote_smoothing. Both cover rotation
+    // and position.
+    float local_smoothing = static_cast<float>(cameraunlock::math::kDefaultLocalSmoothing);
+    float remote_smoothing = static_cast<float>(cameraunlock::math::kDefaultRemoteSmoothing);
+
+    // The tracking mode the session starts in, as a pair: both true is rotation and
+    // position, and cameraunlock::DecodeTrackingMode reads the other two.
+    bool rotation_enabled = true;
+    bool position_enabled = true;
+
+    // Metres of head travel. Vertical travel is clamped as [-pos_limit_y_down,
+    // +pos_limit_y], forward as pos_limit_z and back as pos_limit_z_back.
+    float pos_limit_x = cameraunlock::PositionSettings{}.limit_x;
+    float pos_limit_y = cameraunlock::PositionSettings{}.limit_y;
+    float pos_limit_y_down = cameraunlock::PositionSettings{}.limit_y_down;
+    float pos_limit_z = cameraunlock::PositionSettings{}.limit_z;
+    float pos_limit_z_back = cameraunlock::PositionSettings{}.limit_z_back;
+
+    std::string toggle_key{
+        cameraunlock::config::schema::ConceptTraits<cameraunlock::config::schema::Concept::ToggleKey>::kCanonicalDefault};
+    std::string cycle_tracking_mode_key{cameraunlock::config::schema::ConceptTraits<
+        cameraunlock::config::schema::Concept::CycleTrackingModeKey>::kCanonicalDefault};
+    std::string yaw_mode_key{
+        cameraunlock::config::schema::ConceptTraits<cameraunlock::config::schema::Concept::YawModeKey>::kCanonicalDefault};
 
     // Field of view in degrees for an unzoomed frame, or 0 to render the game's own.
     // Applied as a ratio against the camera's unzoomed angle rather than written flat
     // over the frame's, so iron sights, scopes and scripted cameras keep zooming by the
     // same factor - see fov_override.h.
-    float fov_override = defaults::kFovOverride;
+    float fov_override = 0.0f;
 
-    // Dump the player controller to the log at a fixed interval. Off in every shipped
-    // INI: it is a maintenance diagnostic, and the one thing in the mod that writes to
-    // the log faster than a player can read it.
-    bool  state_probe = defaults::kStateProbe;
+    // Dump the player controller to the log at a fixed interval. A maintenance
+    // diagnostic, and the one thing in the mod that writes to the log faster than a
+    // player can read it.
+    bool state_probe = false;
 
     // Sample the head pose, the aim resolved in the tracked view and where it projected
-    // to, once every two seconds. Off in every shipped INI: a session's worth of it is
-    // thousands of lines, and the events a player would report sit between them.
-    bool  aim_geometry_log = defaults::kAimGeometryLog;
-
-    // 6DOF positional tracking.
-    bool  position_enabled = defaults::kPositionEnabled;
-    float pos_limit_x = defaults::kPosLimitX;
-    // Vertical travel is clamped as [-pos_limit_y_down, +pos_limit_y]. The two are
-    // separate keys because a player sitting down has less room to duck than to
-    // stretch up, and mirroring one into the other would hide that.
-    float pos_limit_y = defaults::kPosLimitY;
-    float pos_limit_y_down = defaults::kPosLimitYDown;
-    float pos_limit_z = defaults::kPosLimitZ;
-    float pos_limit_z_back = defaults::kPosLimitZBack;
-
-    int vk_toggle     = defaults::kVkToggle;
-    int vk_cycle_mode = defaults::kVkCycleMode;
-    int vk_yaw_mode   = defaults::kVkYawMode;
-    bool chord_toggle = defaults::kChord;
-    bool chord_cycle_mode = defaults::kChord;
-    bool chord_yaw_mode = defaults::kChord;
-
-    bool LoadOrCreate(const char* iniPath);
+    // to, once every two seconds. A session's worth of it is thousands of lines.
+    bool aim_geometry_log = false;
 };
+
+// [View] Fov: 0, the game's own angle, or 30 to 150 degrees. Below 30 the frame is a
+// telescope and tan(fov/2) runs away as 180 approaches, so an angle outside that is not a
+// field of view anyone meant.
+class FovCodec {
+public:
+    using Value = float;
+
+    static constexpr float kMin = 30.0f;
+    static constexpr float kMax = 150.0f;
+
+    cameraunlock::config::CodecParseResult<float> Parse(std::string_view text) const;
+    // Throws std::invalid_argument for a value Parse would not read back.
+    std::string Render(float value) const;
+    bool Equal(float a, float b) const { return angle_.Equal(a, b); }
+
+private:
+    cameraunlock::config::FloatCodec angle_{0.0f, kMax};
+};
+
+// The rows of HeadTracking.ini. Only the tracking mode pair and WorldSpaceYaw are Writable:
+// the mode and yaw hotkeys save the player's choice, and End changes the session only.
+cameraunlock::config::ConfigTable<Config> ConfigTable();
+
+// What the renderer writes above the settings.
+cameraunlock::config::RenderHeader ConfigHeader();
+
+// The file as the last pre-canonical build read it (src/legacy_config), mapped into Config.
+cameraunlock::config::LegacyImport<Config> ConfigLegacyImport();
 
 }  // namespace BioShockInfiniteHeadTracking

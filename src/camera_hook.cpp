@@ -46,13 +46,12 @@ std::atomic<TrackingRuntime*> g_tracking{nullptr};
 // nothing but hand the game's own crosshair back.
 std::atomic<bool> g_inert{false};
 std::atomic<bool> g_frameFresh{false};
-bool             g_showAimMarker = true;
 // [Diagnostics] AimGeometry. Off unless a player has been asked to turn it on, because
 // unlike everything else the mod logs it is a running sample rather than an event: it
 // says nothing new between one line and the next, and a session of it buries the lines
 // that do.
 bool             g_aimGeometryLog = false;
-// The configured [View] Fov, taken at install alongside the marker flag rather than read
+// The configured [View] Fov, taken at install rather than read
 // out of the field-of-view module. That module is installed AFTER this one (see
 // InitThread), so asking it would leave the first frames of a session computing the zoom
 // factor against an override the player had configured and this hook had not yet seen.
@@ -107,14 +106,13 @@ struct AimComponents {
 // drift out of agreement with the camera on a combined pose the way a per-axis Euler
 // formula does.
 //
-// `drawMarker` is [General] ShowAimMarker. The placement is the same with the sights up
-// as at the hip; whether the game shows its crosshair while aiming is the game's call.
+// The placement is the same with the sights up as at the hip; whether the game shows its
+// crosshair while aiming is the game's call.
 //
 // The components are handed back as well as stored, so the diagnostic below reports the
 // numbers this frame resolved rather than loading them straight back out of the atomics
 // they were just written to.
-AimComponents PublishAimMarker(const UE3Rotator& clean, const UE3Rotator& tracked,
-                               bool drawMarker) {
+AimComponents PublishAimMarker(const UE3Rotator& clean, const UE3Rotator& tracked) {
     const Mat3 trackedBasis = RotatorToMatrix(tracked);
 
     // Only the clean rotator's forward axis is wanted, so the other two rows are never
@@ -134,7 +132,7 @@ AimComponents PublishAimMarker(const UE3Rotator& clean, const UE3Rotator& tracke
     // may be reordered by the compiler, so `active` could otherwise be observed true
     // alongside the previous frame's - or, on the first activation, the initial -
     // components.
-    marker.active.store(drawMarker, std::memory_order_release);
+    marker.active.store(true, std::memory_order_release);
     return resolved;
 }
 
@@ -316,11 +314,9 @@ void __fastcall Detour(void* thisptr, void* edx, UE3Vector* outLoc, UE3Rotator* 
     // Published for the scene-view hook to place: this detour runs INSIDE CalcSceneView,
     // so the projection matrix the frame will be drawn with has not been written yet. The
     // reticle is drawn from it once that hook has it - see the tail of its detour.
-    const AimComponents aim = PublishAimMarker(clean, *outRot, g_showAimMarker);
+    const AimComponents aim = PublishAimMarker(clean, *outRot);
 
-    const bool canPlaceMark =
-        g_showAimMarker && GetAimMarker().projection_valid.load(std::memory_order_acquire);
-    ReportNoProjectionOnce(g_showAimMarker && !canPlaceMark);
+    ReportNoProjectionOnce(!GetAimMarker().projection_valid.load(std::memory_order_acquire));
     // Stashed rather than reported here. The screen position is derived from the
     // half-field tangents, and this detour runs INSIDE CalcSceneView, so this frame's are
     // not published yet - reporting now would describe the mark with the PREVIOUS frame's
@@ -335,7 +331,6 @@ void __fastcall Detour(void* thisptr, void* edx, UE3Vector* outLoc, UE3Rotator* 
 bool InstallCameraHook(const CameraHookTargets& targets, TrackingRuntime& tracking,
                        const Config& cfg) {
     g_tracking.store(&tracking, std::memory_order_release);
-    g_showAimMarker = cfg.show_aim_marker;
     g_aimGeometryLog = cfg.aim_geometry_log;
     g_fovOverride = cfg.fov_override;
     g_sceneViewCallSite = reinterpret_cast<void*>(targets.sceneViewCallSite);

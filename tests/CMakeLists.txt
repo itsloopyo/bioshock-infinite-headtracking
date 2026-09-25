@@ -12,12 +12,14 @@ add_executable(bsi_tests
     test_main.cpp
 )
 
-# The INI: the shipped file's contents, what the reader makes of a hand-edited one, and
-# an older build's INI still loading. Needs the real config reader and writer.
+# The INI in the canonical format: the committed file against the table (its
+# --render-config mode is what `pixi run render-config` runs), what the table reads, and
+# the rows a hotkey may save. Needs the real config owner on real files.
 add_executable(bsi_config_tests
     test_config.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../src/config.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../src/legacy_config/legacy_config.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../src/path_utils.cpp
 )
 
 # The tracker port shared with every other mod in the fleet: another process holds it,
@@ -26,8 +28,6 @@ add_executable(bsi_config_tests
 add_executable(bsi_port_reclaim_tests
     test_port_reclaim.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../src/tracking_runtime.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/../src/config.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/../src/legacy_config/legacy_config.cpp
 )
 
 # The two page predicates every read of another process's memory goes through: the one in
@@ -45,14 +45,16 @@ add_executable(bsi_memory_tests
 
 # The config conversion's differential test: the dev build's reader (the oracle, byte copies
 # of 128e9d4's files in config_differential/oracle) against the frozen reader in
-# src/legacy_config. The oracle is compiled with its namespace renamed so its Config can sit
+# src/legacy_config, and that against the conversion itself. The oracle is compiled with its namespace renamed so its Config can sit
 # beside the runtime's in one binary, and against the core ADS headers it included at its
 # pin, which core has since removed.
 set(BSI_DIFFERENTIAL_DIR ${CMAKE_CURRENT_SOURCE_DIR}/config_differential)
 add_executable(bsi_config_differential_tests
     ${BSI_DIFFERENTIAL_DIR}/differential_test.cpp
     ${BSI_DIFFERENTIAL_DIR}/oracle/config.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../src/config.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../src/legacy_config/legacy_config.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../src/path_utils.cpp
 )
 set_source_files_properties(${BSI_DIFFERENTIAL_DIR}/oracle/config.cpp PROPERTIES
     COMPILE_DEFINITIONS "BioShockInfiniteHeadTracking=BsiOracle128e9d4")
@@ -110,3 +112,10 @@ foreach(suite bsi_tests bsi_config_tests bsi_port_reclaim_tests bsi_memory_tests
 endforeach()
 
 target_link_libraries(bsi_port_reclaim_tests PRIVATE ws2_32)
+
+# The file `pixi run render-config` writes, at the path core's data/config-format.json
+# records for this repo.
+foreach(suite bsi_config_tests bsi_config_differential_tests)
+    target_compile_definitions(${suite} PRIVATE
+        BSI_COMMITTED_CONFIG="${CMAKE_CURRENT_SOURCE_DIR}/../config/HeadTracking.ini")
+endforeach()

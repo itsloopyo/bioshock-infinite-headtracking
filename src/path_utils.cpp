@@ -87,48 +87,32 @@ std::wstring GetModulePathW(const char* filename) {
     return wide;
 }
 
-std::string GetModulePath(const char* filename) {
-    const std::wstring dir = GetModuleDirectoryW();
-    if (dir.empty()) {
-        return {};
+std::string AnsiFolderPath(const std::wstring& folder) {
+    std::string narrow;
+    if (NarrowPath(folder, &narrow)) {
+        return narrow;
     }
-
-    std::string narrowDir;
-    if (!NarrowPath(dir, &narrowDir)) {
-        // The install path has characters the ANSI codepage cannot spell, so the narrow
-        // form would name a different directory - one containing '?'. The 8.3 alias is
-        // the same path written in ASCII, which is why it is tried rather than treated
-        // as a failure: a Cyrillic or CJK Steam library is a normal install.
-        //
-        // Aliased on the DIRECTORY, which always exists. GetShortPathNameW resolves each
-        // component on disk, so pointing it at the file would fail with
-        // ERROR_FILE_NOT_FOUND on the very first launch - before the INI has been
-        // written - and the INI is only ever written after this returns. That is a
-        // fallback that could never once have fired.
-        std::vector<wchar_t> shortDir(MAX_PATH);
-        for (;;) {
-            const DWORD written = GetShortPathNameW(dir.c_str(), shortDir.data(),
-                                                    static_cast<DWORD>(shortDir.size()));
-            if (written == 0) {
-                return {};
-            }
-            if (written < shortDir.size()) {
-                break;
-            }
-            shortDir.resize(written + 1);
-        }
-        if (!NarrowPath(std::wstring(shortDir.data()), &narrowDir)) {
-            // 8.3 alias generation is off for this volume, so the path has no ASCII
-            // spelling. Returning the bare filename instead would send
-            // GetPrivateProfileString to the Windows directory, to read someone else's
-            // file as this mod's config.
+    // The folder has characters the ANSI codepage cannot spell, so the narrow form would
+    // name a different directory - one containing '?'. The 8.3 alias is the same path
+    // written in ASCII: a Cyrillic or CJK Steam library is a normal install. Aliased on
+    // the folder, which exists, rather than on a file that may not yet.
+    std::vector<wchar_t> shortDir(MAX_PATH);
+    for (;;) {
+        const DWORD written = GetShortPathNameW(folder.c_str(), shortDir.data(),
+                                                static_cast<DWORD>(shortDir.size()));
+        if (written == 0) {
             return {};
         }
+        if (written < shortDir.size()) {
+            break;
+        }
+        shortDir.resize(written + 1);
     }
-
-    // The filename is an ASCII literal from this file, so appending it after the
-    // conversion keeps it out of the codepage question entirely.
-    return narrowDir + filename;
+    // 8.3 alias generation is off for this volume, so the path has no ASCII spelling.
+    if (!NarrowPath(std::wstring(shortDir.data()), &narrow)) {
+        return {};
+    }
+    return narrow;
 }
 
 }  // namespace BioShockInfiniteHeadTracking

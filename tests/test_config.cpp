@@ -1,32 +1,40 @@
-// Characterization tests for the INI: what the shipped file contains, what the reader
-// makes of a hand-edited one, and that a file an older build wrote still loads.
+// HeadTracking.ini as the canonical config format: the file the mod creates, what its
+// table reads, which rows a hotkey may save, and that a save touches nothing else.
 //
-// The config is the one part of the mod a player edits, so a change of meaning here
-// reaches them as a setting that quietly stopped working. The three things pinned below
-// are the ones with somewhere to go wrong: the defaults are stated in three places
-// (config.h, the writer, the reader's fallbacks) and must agree; the boundary checks turn
-// a typo into the shipped value rather than into a NaN in the view matrix; and
-// keys a retired feature left behind load without failing anything.
+// The conversion of an older file is tests/config_differential/'s job; this suite covers
+// the canonical file from its first launch on.
 //
-// Windows-only, like test_port_reclaim.cpp: the reader is GetPrivateProfileString. Until this repo has a build system, run it from the repo
-// root with
-/*
-   g++ -std=c++17 -Isrc -Icameraunlock-core/cpp/include tests/test_config.cpp \
-       src/config.cpp cameraunlock-core/cpp/src/config/ini_reader.cpp \
-       cameraunlock-core/cpp/src/logging/file_log.cpp -o config_tests.exe
-*/
-// then run config_tests.exe. Exit code 0 means every check passed.
+// `bsi_config_tests --render-config <path>` writes the file the table renders from its
+// defaults to <path> and runs nothing else. `pixi run render-config` uses it to rewrite
+// config/HeadTracking.ini, which TestTheCommittedFileIsTheRenderedDefaults holds to the code.
 
 #include <windows.h>
 
 #include <cstdio>
-#include <cstdlib>
 #include <cstring>
+#include <filesystem>
+#include <fstream>
+#include <iterator>
+#include <memory>
+#include <stdexcept>
 #include <string>
+#include <vector>
 
 #include "config.h"
 
+#include "cameraunlock/config/canonical_ini.h"
+#include "cameraunlock/config/config_owner.h"
+#include "cameraunlock/input/key_bindings.h"
+#include "cameraunlock/tracking/tracking_mode.h"
+
 namespace {
+
+namespace fs = std::filesystem;
+using namespace BioShockInfiniteHeadTracking;
+using cameraunlock::config::ConfigLoadStatus;
+using cameraunlock::config::ConfigOwner;
+using cameraunlock::config::ConfigOwnerOptions;
+using cameraunlock::config::ConfigSaveStatus;
 
 int g_failures = 0;
 int g_checks = 0;
@@ -38,406 +46,287 @@ void Check(bool ok, const char* what, int line) {
     std::printf("FAIL %s:%d  %s\n", __FILE__, line, what);
 }
 
-void CheckNear(float got, float want, const char* what, int line) {
-    ++g_checks;
-    const float diff = got - want;
-    if (diff <= 1e-4f && diff >= -1e-4f) return;
-    ++g_failures;
-    std::printf("FAIL %s:%d  %s: got %.6f, want %.6f\n", __FILE__, line, what, got, want);
-}
-
 #define CHECK(cond) Check((cond), #cond, __LINE__)
-#define CHECK_NEAR(got, want) CheckNear((got), (want), #got, __LINE__)
 
-using namespace BioShockInfiniteHeadTracking;
+std::string ReadBytes(const fs::path& path) {
+    std::ifstream in(path, std::ios::binary);
+    if (!in) throw std::runtime_error("could not read " + path.string());
+    return std::string(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+}
 
-// GetPrivateProfileString resolves a bare filename against the WINDOWS directory rather
-// than the working one, which is why the mod builds an absolute path of its own
-// (path_utils.h) and why the tests have to drive it through one too. A relative path here
-// reads someone else's file, and every check below then passes on the defaults.
-std::string AbsolutePath(const char* name) {
-    char buf[MAX_PATH];
-    const DWORD written = GetFullPathNameA(name, MAX_PATH, buf, nullptr);
-    if (written == 0 || written >= MAX_PATH) {
-        std::printf("could not resolve %s to an absolute path\n", name);
-        std::exit(2);
+void WriteBytes(const fs::path& path, const std::string& bytes) {
+    std::ofstream out(path, std::ios::binary | std::ios::trunc);
+    out.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
+    if (!out) throw std::runtime_error("could not write " + path.string());
+}
+
+std::string Rendered(const Config& config) {
+    return cameraunlock::config::RenderCanonical(ConfigTable(), config, ConfigHeader());
+}
+
+fs::path g_root;
+int g_next_dir = 0;
+
+fs::path FreshIni() {
+    const fs::path dir = g_root / std::to_string(g_next_dir++);
+    fs::create_directories(dir);
+    return dir / "HeadTracking.ini";
+}
+
+std::unique_ptr<ConfigOwner<Config>> NewOwner(const fs::path& path) {
+    ConfigOwnerOptions<Config> options;
+    options.path = path.wstring();
+    options.table = ConfigTable();
+    options.import = ConfigLegacyImport();
+    options.header = ConfigHeader();
+    return std::make_unique<ConfigOwner<Config>>(std::move(options));
+}
+
+// The lines of `after` that differ from `before`, which must have as many lines.
+std::vector<std::string> ChangedLines(const std::string& before, const std::string& after) {
+    const auto split = [](const std::string& text) {
+        std::vector<std::string> lines;
+        std::size_t start = 0;
+        for (std::size_t end; (end = text.find("\r\n", start)) != std::string::npos; start = end + 2) {
+            lines.push_back(text.substr(start, end - start));
+        }
+        lines.push_back(text.substr(start));
+        return lines;
+    };
+    const std::vector<std::string> a = split(before);
+    const std::vector<std::string> b = split(after);
+    std::vector<std::string> changed;
+    if (a.size() != b.size()) {
+        changed.push_back("line count");
+        return changed;
     }
-    return buf;
-}
-
-const char* IniPath() {
-    static const std::string path = AbsolutePath("test_config_tmp.ini");
-    return path.c_str();
-}
-
-void WriteIni(const char* body) {
-    std::remove(IniPath());
-    std::FILE* f = std::fopen(IniPath(), "wb");
-    if (!f) {
-        std::printf("could not write %s\n", IniPath());
-        ++g_failures;
-        return;
+    for (std::size_t i = 0; i < a.size(); ++i) {
+        if (a[i] != b[i]) changed.push_back(b[i]);
     }
-    std::fwrite(body, 1, std::strlen(body), f);
-    std::fclose(f);
+    return changed;
 }
 
-std::string ReadIni() {
-    std::FILE* f = std::fopen(IniPath(), "rb");
-    if (!f) return {};
-    std::string out;
-    char buf[512];
-    size_t n;
-    while ((n = std::fread(buf, 1, sizeof(buf), f)) > 0) out.append(buf, n);
-    std::fclose(f);
-    return out;
+// ---- the file --------------------------------------------------------------------------
+
+void TestTheCommittedFileIsTheRenderedDefaults() {
+    CHECK(ReadBytes(BSI_COMMITTED_CONFIG) == Rendered(ConfigTable().defaults()));
 }
 
-// The file the mod writes on first launch must read back as the defaults it was written
-// from. The three statements of each default - config.h, the writer, the reader's
-// fallback - have no other check that they agree.
-void TestFreshInstallRoundTripsTheShippedDefaults() {
-    std::remove(IniPath());
-    Config c;
-    CHECK(c.LoadOrCreate(IniPath()));
+// The shipped defaults as literals, so a core bump that moves one of core's constants
+// shows up here rather than in a player's file.
+void TestTheDefaultsAreTheDocumentedNumbers() {
+    const Config c = ConfigTable().defaults();
+    CHECK(c.udp_port == 4242);
+    CHECK(c.enable_on_startup);
+    CHECK(c.world_space_yaw);
+    CHECK(c.data_freshness_ms == 500);
+    CHECK(c.local_smoothing == 0.0f);
+    CHECK(c.remote_smoothing == 0.15f);
+    CHECK(c.rotation_enabled && c.position_enabled);
+    CHECK(c.pos_limit_x == 0.30f);
+    CHECK(c.pos_limit_y == 0.20f);
+    CHECK(c.pos_limit_y_down == 0.20f);
+    CHECK(c.pos_limit_z == 0.40f);
+    CHECK(c.pos_limit_z_back == 0.10f);
+    CHECK(c.toggle_key == "End, Ctrl+Shift+Y");
+    CHECK(c.cycle_tracking_mode_key == "PageUp, Ctrl+Shift+G");
+    CHECK(c.yaw_mode_key == "PageDown, Ctrl+Shift+H");
+    CHECK(c.fov_override == 0.0f);
+    CHECK(!c.state_probe);
+    CHECK(!c.aim_geometry_log);
+}
 
-    CHECK(c.enabled_on_startup == defaults::kEnableOnStartup);
-    CHECK(c.udp_port == defaults::kPort);
-    CHECK(c.data_freshness_ms == defaults::kDataFreshnessMs);
-    CHECK(c.world_space_yaw == defaults::kWorldSpaceYaw);
-    CHECK(c.show_aim_marker == defaults::kShowAimMarker);
-    CHECK_NEAR(c.fov_override, defaults::kFovOverride);
-    CHECK_NEAR(c.local_smoothing, defaults::kLocalSmoothing);
-    CHECK_NEAR(c.remote_smoothing, defaults::kRemoteSmoothing);
-    CHECK(c.position_enabled == defaults::kPositionEnabled);
-    CHECK_NEAR(c.pos_limit_x, defaults::kPosLimitX);
-    CHECK_NEAR(c.pos_limit_y, defaults::kPosLimitY);
-    CHECK_NEAR(c.pos_limit_y_down, defaults::kPosLimitYDown);
-    CHECK_NEAR(c.pos_limit_z, defaults::kPosLimitZ);
-    CHECK_NEAR(c.pos_limit_z_back, defaults::kPosLimitZBack);
-    CHECK(c.vk_toggle == defaults::kVkToggle);
-    CHECK(c.vk_cycle_mode == defaults::kVkCycleMode);
-    CHECK(c.vk_yaw_mode == defaults::kVkYawMode);
-    CHECK(c.chord_toggle == defaults::kChord);
-    CHECK(c.chord_cycle_mode == defaults::kChord);
-    CHECK(c.chord_yaw_mode == defaults::kChord);
-
-    // Every section the reader looks in has to be in the file it wrote, or a key added
-    // later lands in a section that is not there.
-    const std::string text = ReadIni();
-    for (const char* section : { "[General]", "[View]", "[Smoothing]", "[Position]",
-                                 "[Hotkeys]" }) {
-        CHECK(text.find(section) != std::string::npos);
+// Every key list parses as native key bindings, chords included, since the hotkeys are
+// registered straight from them.
+void TestTheDefaultKeyListsParse() {
+    const Config c = ConfigTable().defaults();
+    for (const std::string* list : {&c.toggle_key, &c.cycle_tracking_mode_key, &c.yaw_mode_key}) {
+        const auto parsed = cameraunlock::input::ParseKeyBindings(*list);
+        CHECK(parsed.ok());
+        CHECK(parsed.bindings.size() == 2);
     }
-    std::remove(IniPath());
 }
 
-// A second load of the file the first one wrote must not drift.
-void TestReloadIsIdempotent() {
-    std::remove(IniPath());
-    Config first;
-    CHECK(first.LoadOrCreate(IniPath()));
-    const std::string written = ReadIni();
+// ---- what the table reads -------------------------------------------------------------
 
-    Config second;
-    CHECK(second.LoadOrCreate(IniPath()));
-    CHECK(ReadIni() == written);
-    CHECK(second.udp_port == first.udp_port);
-    CHECK_NEAR(second.remote_smoothing, first.remote_smoothing);
-    std::remove(IniPath());
+Config Applied(const std::string& body, std::size_t* diagnostics = nullptr) {
+    const std::string bytes = "[CameraUnlock]\r\nConfigFormat=1\r\n" + body;
+    const cameraunlock::config::CanonicalIni doc = cameraunlock::config::ParseCanonicalIni(bytes);
+    Config config = ConfigTable().defaults();
+    const auto report = cameraunlock::config::ApplyCanonical(doc, ConfigTable(), config);
+    if (diagnostics) *diagnostics = doc.diagnostics.size() + report.diagnostics.size();
+    return config;
 }
 
 void TestHandEditedValuesAreRead() {
-    WriteIni("[General]\n"
-             "EnableOnStartup=false\n"
-             "Port=5555\n"
-             "DataFreshnessMs=250\n"
-             "WorldSpaceYaw=false\n"
-             "ShowAimMarker=false\n"
-             "[View]\n"
-             "Fov=95\n"
-             "[Smoothing]\n"
-             "LocalSmoothing=0.25\n"
-             "RemoteSmoothing=0.4\n"
-             "[Position]\n"
-             "Enabled=false\n"
-             "LimitX=0.11\n"
-             "LimitY=0.22\n"
-             "LimitYDown=0.33\n"
-             "LimitZ=0.44\n"
-             "LimitZBack=0.05\n"
-             "PositionScale=-50\n"
-             "[Hotkeys]\n"
-             "Toggle=0x70\n"
-             "CycleMode=0x71\n"
-             "YawMode=0x72\n"
-             "ChordToggle=false\n");
-    Config c;
-    CHECK(c.LoadOrCreate(IniPath()));
-    CHECK(!c.enabled_on_startup);
+    std::size_t diagnostics = 1;
+    const Config c = Applied("[Network]\r\nUdpPort=5555\r\n"
+                             "[General]\r\nEnableOnStartup=false\r\nWorldSpaceYaw=false\r\n"
+                             "RotationEnabled=true\r\nDataFreshnessMs=250\r\n"
+                             "[Smoothing]\r\nLocalSmoothing=0.25\r\nRemoteSmoothing=0.4\r\n"
+                             "[Position]\r\nPositionEnabled=false\r\nPositionLimitX=0.11\r\n"
+                             "PositionLimitY=0.22\r\nPositionLimitYDown=0.33\r\nPositionLimitZ=0.44\r\n"
+                             "PositionLimitZBack=0.05\r\n"
+                             "[Hotkeys]\r\nToggleKey=F1\r\nCycleTrackingModeKey=F2, Ctrl+Shift+G\r\n"
+                             "YawModeKey=\r\n"
+                             "[View]\r\nFov=95\r\n"
+                             "[Diagnostics]\r\nStateProbe=true\r\nAimGeometry=true\r\n",
+                             &diagnostics);
+    CHECK(diagnostics == 0);
     CHECK(c.udp_port == 5555);
-    CHECK(c.data_freshness_ms == 250);
+    CHECK(!c.enable_on_startup);
     CHECK(!c.world_space_yaw);
-    CHECK(!c.show_aim_marker);
-    CHECK_NEAR(c.fov_override, 95.0f);
-    CHECK_NEAR(c.local_smoothing, 0.25f);
-    CHECK_NEAR(c.remote_smoothing, 0.4f);
-    CHECK(!c.position_enabled);
-    CHECK_NEAR(c.pos_limit_x, 0.11f);
-    CHECK_NEAR(c.pos_limit_y, 0.22f);
-    CHECK_NEAR(c.pos_limit_y_down, 0.33f);
-    CHECK_NEAR(c.pos_limit_z, 0.44f);
-    CHECK_NEAR(c.pos_limit_z_back, 0.05f);
-    CHECK(c.vk_toggle == 0x70);
-    CHECK(c.vk_cycle_mode == 0x71);
-    CHECK(c.vk_yaw_mode == 0x72);
-    CHECK(!c.chord_toggle);
-    CHECK(c.chord_cycle_mode);
-    std::remove(IniPath());
+    CHECK(c.data_freshness_ms == 250);
+    CHECK(c.local_smoothing == 0.25f);
+    CHECK(c.remote_smoothing == 0.4f);
+    CHECK(c.rotation_enabled && !c.position_enabled);
+    CHECK(c.pos_limit_x == 0.11f);
+    CHECK(c.pos_limit_y == 0.22f);
+    CHECK(c.pos_limit_y_down == 0.33f);
+    CHECK(c.pos_limit_z == 0.44f);
+    CHECK(c.pos_limit_z_back == 0.05f);
+    CHECK(c.toggle_key == "F1");
+    CHECK(c.cycle_tracking_mode_key == "F2, Ctrl+Shift+G");
+    CHECK(c.yaw_mode_key.empty());
+    CHECK(c.fov_override == 95.0f);
+    CHECK(c.state_probe);
+    CHECK(c.aim_geometry_log);
 }
 
-// A port outside the range is the one config error that stops the load: the receiver
-// cannot bind to it, so carrying on would leave the mod running with no tracker and
-// nothing in the log tying that to the file.
-void TestPortOutOfRangeFailsTheLoad() {
-    for (const char* body : { "[General]\nPort=99999\n", "[General]\nPort=80\n" }) {
-        WriteIni(body);
-        Config c;
-        CHECK(!c.LoadOrCreate(IniPath()));
+// [View] Fov is 0 or an angle from 30 to 150. Anything else keeps the default, the game's
+// own angle, with a diagnostic, rather than being clamped into the range.
+void TestFovOutsideItsRangeKeepsTheGamesAngle() {
+    for (const char* value : {"20", "-3", "151", "0,5", "nan"}) {
+        std::size_t diagnostics = 0;
+        const Config c = Applied(std::string("[View]\r\nFov=") + value + "\r\n", &diagnostics);
+        CHECK(c.fov_override == 0.0f);
+        CHECK(diagnostics == 1);
     }
-    std::remove(IniPath());
-}
-
-// Everything else that is out of range is repaired to the shipped value rather than
-// failing the load, because a NaN or a negative limit reaches the view matrix.
-void TestOutOfRangeValuesFallBackToTheDefaults() {
-    WriteIni("[General]\n"
-             "DataFreshnessMs=-5\n"
-             "[View]\n"
-             "Fov=200\n"
-             "[Smoothing]\n"
-             "LocalSmoothing=2.0\n"
-             "RemoteSmoothing=-1.0\n"
-             "[Position]\n"
-             "LimitX=-0.5\n"
-             "[Hotkeys]\n"
-             "Toggle=0x1FF\n");
-    Config c;
-    CHECK(c.LoadOrCreate(IniPath()));
-    CHECK(c.data_freshness_ms == defaults::kDataFreshnessMs);
-    // Clamped into the range that has a projection, which is what someone typing 200 is
-    // asking for.
-    CHECK_NEAR(c.fov_override, defaults::kMaxFovOverride);
-    CHECK_NEAR(c.local_smoothing, 1.0f);
-    CHECK_NEAR(c.remote_smoothing, 0.0f);
-    // A negative limit would hand PositionProcessor::ClampToLimits lo > hi, which pins
-    // the offset at a constant instead of bounding it.
-    CHECK_NEAR(c.pos_limit_x, 0.0f);
-    CHECK(c.vk_toggle == defaults::kVkToggle);
-    std::remove(IniPath());
-}
-
-// Zero is the off switch and passes through; a negative number is a typo for it rather
-// than an angle, so it lands there too.
-void TestFovOffAndNegativeBothRenderTheGamesOwn() {
-    for (const char* body : { "[View]\nFov=0\n", "[View]\nFov=-3\n" }) {
-        WriteIni(body);
-        Config c;
-        CHECK(c.LoadOrCreate(IniPath()));
-        CHECK_NEAR(c.fov_override, defaults::kFovOverride);
+    for (const float angle : {0.0f, 30.0f, 150.0f}) {
+        CHECK(FovCodec{}.Parse(FovCodec{}.Render(angle)).value == angle);
     }
-    std::remove(IniPath());
+    bool threw = false;
+    try {
+        FovCodec{}.Render(20.0f);
+    } catch (const std::invalid_argument&) {
+        threw = true;
+    }
+    CHECK(threw);
 }
 
-// A config that sets only LimitY must not keep the shipped 0.20 m of downward travel
-// while the upward budget moves, with nothing in the log saying the key was
-// half-effective.
-void TestLimitYDownFollowsLimitYWhenUnset() {
-    WriteIni("[Position]\nLimitY=0.45\n");
-    Config c;
-    CHECK(c.LoadOrCreate(IniPath()));
-    CHECK_NEAR(c.pos_limit_y, 0.45f);
-    CHECK_NEAR(c.pos_limit_y_down, 0.45f);
-    std::remove(IniPath());
+// The pre-canonical keys are not read from a canonical file: a player who copies an old
+// line in gets a diagnostic, not a setting.
+void TestThePreCanonicalKeysAreNotRead() {
+    std::size_t diagnostics = 0;
+    const Config c = Applied("[General]\r\nShowAimMarker=false\r\n[Hotkeys]\r\nChordToggle=false\r\n",
+                             &diagnostics);
+    CHECK(diagnostics == 2);
+    CHECK(c.toggle_key == "End, Ctrl+Shift+Y");
 }
 
-// The aim-down-sights mode cycle is retired. An INI written while it existed still carries
-// its keys, and it must load exactly as it would without them: nothing fails, the other
-// bindings are read as written, and a freshly written file no longer mentions them.
-void TestAnIniWithTheRetiredAdsKeysStillLoads() {
-    WriteIni("[General]\n"
-             "Port=5555\n"
-             "AdsMode=marker\n"
-             "[Hotkeys]\n"
-             "Toggle=0x70\n"
-             "CycleMode=0x71\n"
-             "YawMode=0x72\n"
-             "AdsMode=0x2D\n"
-             "ChordAdsMode=true\n"
-             "ChordToggle=false\n");
-    Config c;
-    CHECK(c.LoadOrCreate(IniPath()));
-    CHECK(c.udp_port == 5555);
-    CHECK(c.vk_toggle == 0x70);
-    CHECK(c.vk_cycle_mode == 0x71);
-    CHECK(c.vk_yaw_mode == 0x72);
-    CHECK(!c.chord_toggle);
-    CHECK(c.chord_cycle_mode);
-    CHECK(c.chord_yaw_mode);
+// ---- what the owner writes --------------------------------------------------------------
 
-    std::remove(IniPath());
-    Config fresh;
-    CHECK(fresh.LoadOrCreate(IniPath()));
-    const std::string text = ReadIni();
-    CHECK(text.find("AdsMode") == std::string::npos);
-    CHECK(text.find("Insert") == std::string::npos);
-    CHECK(text.find("Ctrl+Shift+U") == std::string::npos);
-    std::remove(IniPath());
+void TestFirstLaunchCreatesTheCommittedFile() {
+    const fs::path path = FreshIni();
+    const auto owner = NewOwner(path);
+    CHECK(owner->Load().status == ConfigLoadStatus::Created);
+    CHECK(ReadBytes(path) == ReadBytes(BSI_COMMITTED_CONFIG));
+}
+
+// A save changes the lines of its rows and not one other byte, and the next launch reads
+// what was saved. The tracking mode is always written as the pair.
+void TestTheModeAndYawKeysSaveTheirRowsOnly() {
+    const fs::path path = FreshIni();
+    const auto owner = NewOwner(path);
+    owner->Load();
+    const std::string created = ReadBytes(path);
+
+    const cameraunlock::TrackingModeChannels positionOnly =
+        cameraunlock::EncodeTrackingMode(cameraunlock::TrackingMode::PositionOnly);
+    CHECK(owner->Save([&](Config& c) {
+                   c.rotation_enabled = positionOnly.rotation_enabled;
+                   c.position_enabled = positionOnly.position_enabled;
+               }).status == ConfigSaveStatus::Saved);
+    const std::string moded = ReadBytes(path);
+    CHECK((ChangedLines(created, moded) == std::vector<std::string>{"RotationEnabled=false"}));
+
+    const cameraunlock::TrackingModeChannels rotationOnly =
+        cameraunlock::EncodeTrackingMode(cameraunlock::TrackingMode::RotationOnly);
+    CHECK(owner->Save([&](Config& c) {
+                   c.rotation_enabled = rotationOnly.rotation_enabled;
+                   c.position_enabled = rotationOnly.position_enabled;
+               }).status == ConfigSaveStatus::Saved);
+    const std::string cycled = ReadBytes(path);
+    CHECK((ChangedLines(created, cycled) == std::vector<std::string>{"PositionEnabled=false"}));
+
+    CHECK(owner->Save([](Config& c) { c.world_space_yaw = false; }).status == ConfigSaveStatus::Saved);
+    const std::string yawed = ReadBytes(path);
+    CHECK((ChangedLines(cycled, yawed) == std::vector<std::string>{"WorldSpaceYaw=false"}));
+
+
+    const auto next = NewOwner(path);
+    const auto loaded = next->Load();
+    CHECK(loaded.status == ConfigLoadStatus::Canonical);
+    CHECK(loaded.config.rotation_enabled && !loaded.config.position_enabled);
+    CHECK(!loaded.config.world_space_yaw);
+    CHECK(ReadBytes(path) == yawed);
+}
+
+// End changes the session only, so EnableOnStartup is not a row a save may change; nor is
+// anything else a hotkey does not set.
+void TestOnlyTheModeAndYawRowsAreWritable() {
+    const fs::path path = FreshIni();
+    const auto owner = NewOwner(path);
+    owner->Load();
+    const std::string created = ReadBytes(path);
+    int refused = 0;
+    const std::vector<void (*)(Config&)> changes = {
+        [](Config& c) { c.enable_on_startup = false; },
+        [](Config& c) { c.udp_port = 5555; },
+        [](Config& c) { c.toggle_key = "F1"; },
+        [](Config& c) { c.fov_override = 90.0f; },
+    };
+    for (const auto change : changes) {
+        try {
+            owner->Save(change);
+        } catch (const std::logic_error&) {
+            ++refused;
+        }
+    }
+    CHECK(refused == static_cast<int>(changes.size()));
+    CHECK(ReadBytes(path) == created);
 }
 
 }  // namespace
 
+int main(int argc, char** argv) {
+    if (argc == 3 && std::strcmp(argv[1], "--render-config") == 0) {
+        WriteBytes(argv[2], Rendered(ConfigTable().defaults()));
+        return 0;
+    }
 
-// A decimal COMMA is what a player on a European desktop types, and the numeric reader
-// stops at it: `LimitZ=0,4` parsed as 0, sanitised to a legal 0.0, and left forward lean
-// dead for the session with nothing in the log - the range check only ever saw the value
-// it would itself have chosen. The whole token has to parse, not a prefix of it.
-void TestADecimalCommaIsRefusedRatherThanTruncated() {
-    WriteIni("[Smoothing]\nLocalSmoothing=0,5\n[Position]\nLimitZ=0,4\nLimitX=0,3\n");
-    Config c;
-    CHECK(c.LoadOrCreate(IniPath()));
-    CHECK_NEAR(c.local_smoothing, defaults::kLocalSmoothing);
-    CHECK_NEAR(c.pos_limit_z, defaults::kPosLimitZ);
-    CHECK_NEAR(c.pos_limit_x, defaults::kPosLimitX);
-}
+    char temp[MAX_PATH];
+    GetTempPathA(MAX_PATH, temp);
+    g_root = fs::path(temp) / ("bsi-config-tests-" + std::to_string(GetCurrentProcessId()));
+    fs::remove_all(g_root);
+    fs::create_directories(g_root);
 
-// Trailing text on the line is the same failure with a different cause.
-void TestATrailingCommentOnAFloatIsRefused() {
-    WriteIni("[Position]\nLimitZ=0.4 and a bit\n");
-    Config c;
-    CHECK(c.LoadOrCreate(IniPath()));
-    CHECK_NEAR(c.pos_limit_z, defaults::kPosLimitZ);
-}
-
-// Non-finite text reaches the sanitiser intact - strtod parses both spellings - so the
-// finite check is live code, and it was the one boundary check with no test at all.
-void TestNonFiniteValuesFallBackToTheDefaults() {
-    WriteIni("[Smoothing]\nLocalSmoothing=nan\nRemoteSmoothing=inf\n[Position]\nLimitZ=nan\n");
-    Config c;
-    CHECK(c.LoadOrCreate(IniPath()));
-    CHECK_NEAR(c.local_smoothing, defaults::kLocalSmoothing);
-    CHECK_NEAR(c.remote_smoothing, defaults::kRemoteSmoothing);
-    CHECK_NEAR(c.pos_limit_z, defaults::kPosLimitZ);
-}
-
-// A bool the reader does not recognise falls back, and the fallback can be the OPPOSITE
-// of what was typed, so a value that is genuinely not a yes/no keeps the default and says
-// so rather than quietly flipping the setting.
-void TestAnUnrecognisedBoolKeepsTheDefault() {
-    WriteIni("[Position]\nEnabled=maybe\n");
-    Config c;
-    CHECK(c.LoadOrCreate(IniPath()));
-    CHECK(c.position_enabled == defaults::kPositionEnabled);
-    // The spellings the reader does accept still work.
-    WriteIni("[Position]\nEnabled=FALSE\n");
-    Config d;
-    CHECK(d.LoadOrCreate(IniPath()));
-    CHECK(!d.position_enabled);
-}
-
-// The shipped defaults as LITERALS. Comparing them against defaults::k* proves only that
-// the writer and the reader agree; every one of those constants is an alias of a
-// cameraunlock-core value, so a core bump could change what this mod ships with the suite
-// still green.
-void TestTheShippedDefaultsAreTheDocumentedNumbers() {
-    std::remove(IniPath());
-    Config c;
-    CHECK(c.LoadOrCreate(IniPath()));
-    CHECK(c.udp_port == 4242);
-    CHECK_NEAR(c.local_smoothing, 0.0f);
-    CHECK_NEAR(c.remote_smoothing, 0.15f);
-    CHECK_NEAR(c.pos_limit_x, 0.30f);
-    CHECK_NEAR(c.pos_limit_y, 0.20f);
-    CHECK_NEAR(c.pos_limit_y_down, 0.20f);
-    CHECK_NEAR(c.pos_limit_z, 0.40f);
-    CHECK_NEAR(c.pos_limit_z_back, 0.10f);
-}
-
-
-// A trailing comment is a documented-safe form on every value core reads as a number, and
-// the whole-token check added for the decimal-comma case rejected it - turning an
-// annotated config into a silent reset of every key the player had tuned.
-void TestATrailingCommentIsKeptNotReset() {
-    WriteIni("[Position]\nLimitZ=0.35 ; deeper lean\nLimitX=0.25 # sideways\n");
-    Config c;
-    CHECK(c.LoadOrCreate(IniPath()));
-    CHECK_NEAR(c.pos_limit_z, 0.35f);
-    CHECK_NEAR(c.pos_limit_x, 0.25f);
-}
-
-// Same for a bool, where the fallback is the OPPOSITE of what was typed. Core matches the
-// whole string, so it read this as the default and switched positional tracking back on
-// for someone who had just switched it off.
-void TestABoolWithATrailingCommentIsHonoured() {
-    WriteIni("[Position]\nEnabled=0 ; no lean\n");
-    Config c;
-    CHECK(c.LoadOrCreate(IniPath()));
-    CHECK(!c.position_enabled);
-}
-
-// Core accepts exactly "true"/"True"/"TRUE" and nothing else, so any other casing read as
-// the default with no warning. The mod decides these itself for that reason.
-void TestBoolSpellingsAreCaseInsensitive() {
-    WriteIni("[Position]\nEnabled=fAlSe\n[General]\nShowAimMarker=oFF\n");
-    Config c;
-    CHECK(c.LoadOrCreate(IniPath()));
-    CHECK(!c.position_enabled);
-    CHECK(!c.show_aim_marker);
-
-    WriteIni("[Position]\nEnabled=YeS\n");
-    Config d;
-    CHECK(d.LoadOrCreate(IniPath()));
-    CHECK(d.position_enabled);
-}
-
-// Port is the one fatal key in the file, so what it rejects matters more than anywhere
-// else: a form core reads fine must not take the whole mod dormant for the session.
-void TestPortAcceptsTheFormsCoreReads() {
-    WriteIni("[General]\nPort=4243 ; tracker port\n");
-    Config c;
-    CHECK(c.LoadOrCreate(IniPath()));
-    CHECK(c.udp_port == 4243);
-
-    WriteIni("[General]\nPort=+4244\n");
-    Config d;
-    CHECK(d.LoadOrCreate(IniPath()));
-    CHECK(d.udp_port == 4244);
-
-    // Genuinely not a number is still fatal, which is the case the message was fixed for.
-    WriteIni("[General]\nPort=default\n");
-    Config e;
-    CHECK(!e.LoadOrCreate(IniPath()));
-}
-
-int main() {
-    TestFreshInstallRoundTripsTheShippedDefaults();
-    TestReloadIsIdempotent();
-    TestHandEditedValuesAreRead();
-    TestPortOutOfRangeFailsTheLoad();
-    TestOutOfRangeValuesFallBackToTheDefaults();
-    TestFovOffAndNegativeBothRenderTheGamesOwn();
-    TestLimitYDownFollowsLimitYWhenUnset();
-    TestAnIniWithTheRetiredAdsKeysStillLoads();
-    TestADecimalCommaIsRefusedRatherThanTruncated();
-    TestATrailingCommentOnAFloatIsRefused();
-    TestNonFiniteValuesFallBackToTheDefaults();
-    TestAnUnrecognisedBoolKeepsTheDefault();
-    TestTheShippedDefaultsAreTheDocumentedNumbers();
-    TestATrailingCommentIsKeptNotReset();
-    TestABoolWithATrailingCommentIsHonoured();
-    TestBoolSpellingsAreCaseInsensitive();
-    TestPortAcceptsTheFormsCoreReads();
-
-    std::printf("%d checks, %d failures\n", g_checks, g_failures);
-    return g_failures == 0 ? 0 : 1;
+    int exit_code = 1;
+    try {
+        TestTheCommittedFileIsTheRenderedDefaults();
+        TestTheDefaultsAreTheDocumentedNumbers();
+        TestTheDefaultKeyListsParse();
+        TestHandEditedValuesAreRead();
+        TestFovOutsideItsRangeKeepsTheGamesAngle();
+        TestThePreCanonicalKeysAreNotRead();
+        TestFirstLaunchCreatesTheCommittedFile();
+        TestTheModeAndYawKeysSaveTheirRowsOnly();
+        TestOnlyTheModeAndYawRowsAreWritable();
+        std::printf("%d checks, %d failures\n", g_checks, g_failures);
+        exit_code = g_failures == 0 ? 0 : 1;
+    } catch (const std::exception& e) {
+        std::printf("FAIL exception: %s\n", e.what());
+    }
+    fs::remove_all(g_root);
+    return exit_code;
 }

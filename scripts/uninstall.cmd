@@ -35,10 +35,10 @@ set "MOD_SEED_FILES="
 :: reinstall: paths relative to the game folder, quoted when one holds a space.
 :: Keep the line when it is blank, or the list another mod's uninstall.cmd set
 :: in the same console is used instead.
-set "PRESERVE_FILES="
+set "PRESERVE_FILES=Binaries\Win32\HeadTracking.ini"
 :: Config and log files the mod writes at runtime, removed from wherever the
 :: DLLs were deployed.
-set "MOD_LEFTOVERS=HeadTracking.ini HeadTracking.log HeadTracking.prev.log"
+set "MOD_LEFTOVERS=HeadTracking.log HeadTracking.prev.log"
 :: Files to remove from the game root. Only needed by a mod deployed BELOW the
 :: root (see ASI_SUBDIR) that still resolves its config and log from the exe's
 :: own directory.

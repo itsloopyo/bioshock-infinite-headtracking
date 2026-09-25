@@ -6,6 +6,7 @@
 #include "cameraunlock/protocol/udp_receiver.h"
 #include "cameraunlock/time/frame_clock.h"
 #include "cameraunlock/tracking/head_tracking_session.h"
+#include "cameraunlock/tracking/tracking_mode.h"
 
 #include <atomic>
 
@@ -38,8 +39,9 @@ public:
     bool IsEnabled() const { return m_enabled.load(std::memory_order_relaxed); }
 
     void ToggleEnabled();
-    void CycleTrackingMode();
-    void ToggleYawMode();
+    // Each returns the state it switched to, which the caller saves.
+    cameraunlock::TrackingMode CycleTrackingMode();
+    bool ToggleYawMode();
 
     bool IsWorldSpaceYaw() const { return m_worldSpaceYaw.load(std::memory_order_relaxed); }
 

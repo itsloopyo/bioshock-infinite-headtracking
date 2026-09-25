@@ -34,6 +34,11 @@ uninstall = "scripts/uninstall.cmd /y"
 # the tracker-port reclaim. Compiled from source every time - never a prebuilt binary.
 test = { cmd = "ctest --test-dir build -C Release --output-on-failure", depends-on = ["build-release"] }
 
+# Rewrite config/HeadTracking.ini, the file the mod creates at first launch, from the config
+# table after a change to a row, a comment or a default; bsi_config_tests fails on the old
+# file until this runs. encode-seed re-encodes any launcher seed that writes the config.
+render-config = { cmd = "build/tests/Release/bsi_config_tests.exe --render-config config/HeadTracking.ini && node cameraunlock-core/scripts/encode-seed.mjs", depends-on = ["build-release"] }
+
 # Package the installer ZIP. Installer-only: see the header of package-release.ps1 for
 # why there is no Nexus archive.
 package = { cmd = "powershell -ExecutionPolicy Bypass -File scripts/package-release.ps1", depends-on = ["build-release", "test"] }

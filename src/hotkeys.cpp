@@ -2,31 +2,32 @@
 
 #include "logging.h"
 
-#include "cameraunlock/input/chord_hotkeys.h"
+#include "cameraunlock/input/key_binding_registration.h"
+#include "cameraunlock/input/key_bindings.h"
 
 #include <exception>
+#include <stdexcept>
+#include <string>
 
 namespace BioShockInfiniteHeadTracking {
+
+namespace {
+
+// The table read each list through the hotkey codec, which keeps the default for a value
+// it cannot read, so every list here parses.
+std::vector<cameraunlock::input::KeyBinding> Bindings(const char* key, const std::string& list) {
+    const cameraunlock::input::KeyBindingsParseResult parsed = cameraunlock::input::ParseKeyBindings(list);
+    if (!parsed.ok()) {
+        throw std::logic_error(std::string("[Hotkeys] ") + key + "=" + list + " did not parse: " + parsed.error);
+    }
+    return parsed.bindings;
+}
+
+}  // namespace
 
 bool Hotkeys::Start(const Config& cfg, Action onToggle, Action onCycleMode,
                     Action onYawMode) {
     if (m_started.load(std::memory_order_acquire)) return true;
-
-    using cameraunlock::input::ChordGuarded;
-    using cameraunlock::input::NavGuarded;
-
-    // Nav-cluster keys are suppressed while Ctrl+Shift is held so the chord
-    // path is the sole trigger for Ctrl+Shift+<nav> combos - a single keypress
-    // never fires an action twice.
-    m_poller.SetToggleKey(cfg.vk_toggle, NavGuarded(onToggle));
-    m_poller.AddHotkey(cfg.vk_cycle_mode, NavGuarded(onCycleMode));
-    m_poller.AddHotkey(cfg.vk_yaw_mode, NavGuarded(onYawMode));
-
-    // Chord alternatives (Ctrl+Shift+Y / Ctrl+Shift+G / Ctrl+Shift+H)
-    // on the same poller; ChordGuarded gates each action on the modifier state.
-    if (cfg.chord_toggle)     m_poller.AddHotkey(kChordToggleKey, ChordGuarded(std::move(onToggle)));
-    if (cfg.chord_cycle_mode) m_poller.AddHotkey(kChordCycleModeKey, ChordGuarded(std::move(onCycleMode)));
-    if (cfg.chord_yaw_mode)   m_poller.AddHotkey(kChordYawModeKey, ChordGuarded(std::move(onYawMode)));
 
     // The poller rethrows rather than failing silently when the thread cannot be
     // created. This entry point is reached from a __stdcall thread procedure, where an
@@ -34,6 +35,11 @@ bool Hotkeys::Start(const Config& cfg, Action onToggle, Action onCycleMode,
     // the log ending on an unrelated line. Caught here so the reason is written down
     // and the caller can tear tracking back down and stay dormant.
     try {
+        using cameraunlock::input::RegisterKeyBindings;
+        RegisterKeyBindings(m_poller, Bindings("ToggleKey", cfg.toggle_key), std::move(onToggle));
+        RegisterKeyBindings(m_poller, Bindings("CycleTrackingModeKey", cfg.cycle_tracking_mode_key),
+                            std::move(onCycleMode));
+        RegisterKeyBindings(m_poller, Bindings("YawModeKey", cfg.yaw_mode_key), std::move(onYawMode));
         if (!m_poller.Start(16)) {
             Log::Line("ERROR: HotkeyPoller failed to start");
             return false;
@@ -43,8 +49,8 @@ bool Hotkeys::Start(const Config& cfg, Action onToggle, Action onCycleMode,
         return false;
     }
 
-    Log::Line("Hotkeys: toggle=0x%02X cyclemode=0x%02X yawmode=0x%02X",
-              cfg.vk_toggle, cfg.vk_cycle_mode, cfg.vk_yaw_mode);
+    Log::Line("Hotkeys: toggle %s; cycle tracking mode %s; yaw mode %s", cfg.toggle_key.c_str(),
+              cfg.cycle_tracking_mode_key.c_str(), cfg.yaw_mode_key.c_str());
 
     m_started.store(true, std::memory_order_release);
     return true;

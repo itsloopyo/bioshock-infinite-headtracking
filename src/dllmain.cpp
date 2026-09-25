@@ -13,12 +13,18 @@
 
 #include "MinHook.h"
 
+#include "cameraunlock/config/config_owner.h"
+#include "cameraunlock/tracking/tracking_mode.h"
+
 #include <windows.h>
 
 #include <cstddef>
 #include <cstdio>
 #include <cstdint>
+#include <exception>
 #include <string>
+#include <utility>
+#include <vector>
 
 #ifndef HEADTRACKING_VERSION
 #error "HEADTRACKING_VERSION must be defined by the build (the version in CMakeLists.txt)"
@@ -44,10 +50,12 @@ T& NeverDestroyed() {
     return *instance;
 }
 
-// Config is all scalars and enums, so it has no destructor to run and needs no wrapper.
-Config g_config;
+Config& g_config = NeverDestroyed<Config>();
 TrackingRuntime& g_tracking = NeverDestroyed<TrackingRuntime>();
 Hotkeys& g_hotkeys = NeverDestroyed<Hotkeys>();
+// The one reader and writer of HeadTracking.ini, built on the init thread once the path is
+// known and, like the objects above, never destroyed.
+cameraunlock::config::ConfigOwner<Config>* g_configOwner = nullptr;
 
 // How the mod is doing, in the states a player's "it isn't working" report can actually
 // be in. Reported on change only - see StatusThread.
@@ -66,7 +74,7 @@ enum class Liveness {
 };
 
 const char* Describe(Liveness state, unsigned long renderDelta, unsigned long otherDelta,
-                     unsigned short port, char* buf, std::size_t bufLen) {
+                     unsigned short port, const char* toggleKeys, char* buf, std::size_t bufLen) {
     switch (state) {
         case Liveness::NoFrames:
             return "Status: no frames. APlayerController::GetPlayerViewPoint has not been "
@@ -89,7 +97,8 @@ const char* Describe(Liveness state, unsigned long renderDelta, unsigned long ot
             std::snprintf(buf, bufLen,
                           "Status: tracking is switched OFF. %lu frames were rendered "
                           "through the hook and no head pose was applied to any of them. "
-                          "Press End (or Ctrl+Shift+Y) to switch it back on.", renderDelta);
+                          "Press a ToggleKey key (%s) to switch it back on.", renderDelta,
+                          toggleKeys);
             return buf;
         case Liveness::Tracking:
             std::snprintf(buf, bufLen,
@@ -144,25 +153,86 @@ DWORD WINAPI StatusThread(LPVOID) {
         }
         reported = state;
         char buf[320];
-        Log::Line("%s", Describe(state, renderDelta, otherDelta, g_config.udp_port, buf,
-                                sizeof(buf)));
+        Log::Line("%s", Describe(state, renderDelta, otherDelta, g_config.udp_port,
+                                g_config.toggle_key.c_str(), buf, sizeof(buf)));
     }
+}
+
+const char* DescribeMode(cameraunlock::TrackingMode mode) {
+    switch (mode) {
+        case cameraunlock::TrackingMode::RotationAndPosition: return "rotation + position";
+        case cameraunlock::TrackingMode::RotationOnly: return "rotation only";
+        case cameraunlock::TrackingMode::PositionOnly: return "position only";
+    }
+    return "unknown";
 }
 
 // One line carrying the settings a "it is behaving oddly" report turns on, so the answer
 // does not need the player's INI as well as their log.
 void ReportConfig() {
     Log::Line("Config: port %u, freshness %d ms, smoothing local %.2f / remote %.2f, "
-              "yaw %s, position %s (x %.2f, y +%.2f/-%.2f, z %.2f/-%.2f m), stock crosshair correction %s, "
+              "yaw %s, tracking mode %s, position limits x %.2f, y +%.2f/-%.2f, z %.2f/-%.2f m, "
               "tracking starts %s",
               g_config.udp_port, g_config.data_freshness_ms, g_config.local_smoothing,
               g_config.remote_smoothing,
               g_config.world_space_yaw ? "world-space (horizon-locked)" : "camera-local",
-              g_config.position_enabled ? "on" : "off", g_config.pos_limit_x,
-              g_config.pos_limit_y, g_config.pos_limit_y_down, g_config.pos_limit_z,
-              g_config.pos_limit_z_back,
-              g_config.show_aim_marker ? "on" : "off",
-              g_config.enabled_on_startup ? "enabled" : "disabled");
+              DescribeMode(cameraunlock::DecodeTrackingMode(g_config.rotation_enabled,
+                                                            g_config.position_enabled).value()),
+              g_config.pos_limit_x, g_config.pos_limit_y, g_config.pos_limit_y_down,
+              g_config.pos_limit_z, g_config.pos_limit_z_back,
+              g_config.enable_on_startup ? "enabled" : "disabled");
+}
+
+void LogConfigLines(const std::vector<std::string>& lines) {
+    for (const std::string& line : lines) {
+        Log::Line("Config: %s", line.c_str());
+    }
+}
+
+// Reads HeadTracking.ini through its owner, converting a file an earlier version wrote.
+// False where the mod must stay dormant: the earlier version's reader refused the file,
+// and that version stayed dormant on it too.
+bool LoadConfig(const std::wstring& iniPath) {
+    cameraunlock::config::ConfigOwnerOptions<Config> options;
+    options.path = iniPath;
+    options.table = ConfigTable();
+    options.import = ConfigLegacyImport();
+    options.header = ConfigHeader();
+    g_configOwner = new cameraunlock::config::ConfigOwner<Config>(std::move(options));
+
+    const cameraunlock::config::ConfigLoadResult<Config> loaded = g_configOwner->Load();
+    LogConfigLines(loaded.log);
+    Log::Line("Config: %s", cameraunlock::config::ConfigLoadStatusName(loaded.status));
+    if (!loaded.reason.empty()) {
+        Log::Line("WARN: %s", loaded.reason.c_str());
+    }
+    if (loaded.status == cameraunlock::config::ConfigLoadStatus::LegacyRefused) {
+        return false;
+    }
+    g_config = loaded.config;
+    return true;
+}
+
+// The mode and yaw hotkeys save the state they switched to. It is already applied, so a
+// save that fails leaves the session on it and says so.
+void LogSave(const char* what, const cameraunlock::config::ConfigSaveResult& saved) {
+    if (saved.status == cameraunlock::config::ConfigSaveStatus::Saved) {
+        return;
+    }
+    LogConfigLines(saved.log);
+    Log::Line("WARN: %s The %s applies for this session.", saved.reason.c_str(), what);
+}
+
+void SaveTrackingMode(cameraunlock::TrackingMode mode) {
+    const cameraunlock::TrackingModeChannels pair = cameraunlock::EncodeTrackingMode(mode);
+    LogSave("tracking mode", g_configOwner->Save([pair](Config& c) {
+        c.rotation_enabled = pair.rotation_enabled;
+        c.position_enabled = pair.position_enabled;
+    }));
+}
+
+void SaveYawMode(bool worldSpace) {
+    LogSave("yaw mode", g_configOwner->Save([worldSpace](Config& c) { c.world_space_yaw = worldSpace; }));
 }
 
 // Everything the mod does, stopped, on the one path that reaches here: the hotkeys did
@@ -186,17 +256,21 @@ void GoInert() {
 DWORD WINAPI InitThread(LPVOID) {
     Log::Line("BioShock Infinite Head Tracking " HEADTRACKING_VERSION " starting");
 
-    const std::string iniPath = GetModulePath("HeadTracking.ini");
+    const std::wstring iniPath = GetModulePathW("HeadTracking.ini");
     if (iniPath.empty()) {
-        Log::Line("ERROR: this mod's own folder has no name this API can express, and 8.3 "
-                  "short names are switched off on the volume, so HeadTracking.ini cannot "
-                  "be located. Staying dormant.");
+        Log::Line("ERROR: this mod's own folder could not be resolved, so HeadTracking.ini "
+                  "cannot be located. Staying dormant.");
         return 0;
     }
-    if (!g_config.LoadOrCreate(iniPath.c_str())) {
-        // The specific reason has already been written by the reader itself - a value out
-        // of range, or the file could not be opened. This says which file and stops.
-        Log::Line("ERROR: %s was not usable. Staying dormant.", iniPath.c_str());
+    // A thread procedure: an exception escaping it ends the game with no word in the log.
+    // The owner throws only for a defect in the table or the import, never for a file.
+    try {
+        if (!LoadConfig(iniPath)) {
+            Log::Line("ERROR: HeadTracking.ini was not usable. Staying dormant.");
+            return 0;
+        }
+    } catch (const std::exception& e) {
+        Log::Line("ERROR: reading HeadTracking.ini failed: %s. Staying dormant.", e.what());
         return 0;
     }
     ReportConfig();
@@ -226,10 +300,11 @@ DWORD WINAPI InitThread(LPVOID) {
                                      base + profile->rvaFovCallSite };
     InstallFovHook(fovTargets, g_config);
     g_tracking.Start(g_config);
+    // End changes the session only; the mode and yaw keys save what they switched to.
     if (!g_hotkeys.Start(g_config,
                          [] { g_tracking.ToggleEnabled(); },
-                         [] { g_tracking.CycleTrackingMode(); },
-                         [] { g_tracking.ToggleYawMode(); })) {
+                         [] { SaveTrackingMode(g_tracking.CycleTrackingMode()); },
+                         [] { SaveYawMode(g_tracking.ToggleYawMode()); })) {
         Log::Line("ERROR: no hotkeys, so tracking could not be switched off in game. "
                   "Standing down and staying dormant.");
         GoInert();
