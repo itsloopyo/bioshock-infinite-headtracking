@@ -183,4 +183,16 @@ cameraunlock::config::LegacyImport<Config> ConfigLegacyImport() {
     return import;
 }
 
+cameraunlock::config::ConfigOwnerOptions<Config> ConfigOptions(const std::wstring& folder,
+                                                               cameraunlock::config::DefaultsFile defaults) {
+    cameraunlock::config::ConfigOwnerOptions<Config> options;
+    options.path = folder + L"CameraUnlock.ini";
+    options.legacy_path = folder + L"HeadTracking.ini";
+    options.table = ConfigTable();
+    options.import = ConfigLegacyImport();
+    options.header = ConfigHeader();
+    options.defaults = std::move(defaults);
+    return options;
+}
+
 }  // namespace BioShockInfiniteHeadTracking

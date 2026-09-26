@@ -4,8 +4,9 @@
 //                  oracle/ (byte copies of that commit's files, checked by tests/CMakeLists.txt)
 //                  against the core sources it was built with at c480d8a
 //   the import     the frozen reader in src/legacy_config/
-//   the migration  ConfigOwner converting the file through ConfigLegacyImport, then the
-//                  canonical reader and ConfigTable on what it wrote
+//   the migration  ConfigOwner in a folder holding only HeadTracking.ini, the legacy file,
+//                  importing it through ConfigLegacyImport into a new CameraUnlock.ini, then
+//                  the canonical reader and ConfigTable on what it wrote
 //
 // Each reading is reduced to what a player's file decides: whether the mod starts, every
 // setting, the tracking state it starts in and the keys it binds.
@@ -13,12 +14,18 @@
 // Comparison 1, oracle against import, finds only DEV_DIFFERENCES, each with its commit.
 // Comparison 2, import against migration, finds only what data/config-format.json in core
 // approves: here the reticle rule, which drops [General] ShowAimMarker=false because the
-// game's crosshair now always follows the aim.
+// game's crosshair now always follows the aim. It runs twice, once over a Defaults.ini at the
+// built-in values and once over one a player changed, since the migration writes default
+// exactly where the imported value equals what Defaults.ini gives.
+//
+// The distinct migrated files go to BSI_MIGRATED_DIR, where lint-migrated.mjs runs core's
+// canonical config lint over them after this binary.
 //
 // Windows only: the oracle and the import are GetPrivateProfileString.
 
 #include <windows.h>
 
+#include <algorithm>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -26,8 +33,10 @@
 #include <fstream>
 #include <iterator>
 #include <memory>
+#include <set>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "cameraunlock/config/canonical_ini.h"
@@ -55,10 +64,12 @@ namespace legacy = BioShockInfiniteHeadTracking::legacy;
 using BioShockInfiniteHeadTracking::Config;
 using BioShockInfiniteHeadTracking::ConfigHeader;
 using BioShockInfiniteHeadTracking::ConfigLegacyImport;
+using BioShockInfiniteHeadTracking::ConfigOptions;
 using BioShockInfiniteHeadTracking::ConfigTable;
 using cameraunlock::TrackingMode;
 using cameraunlock::config::ConfigLoadStatus;
 using cameraunlock::config::ConfigOwner;
+using cameraunlock::config::DefaultsFile;
 using cameraunlock::config::DropRule;
 using cameraunlock::config::ImportResult;
 using cameraunlock::config::ImportStatus;
@@ -284,32 +295,37 @@ Effective ReadImport(const Input& input) {
     return FromLegacyFields(usable, c);
 }
 
-std::unique_ptr<ConfigOwner<Config>> NewOwner(const fs::path& path) {
-    cameraunlock::config::ConfigOwnerOptions<Config> options;
-    options.path = path.wstring();
-    options.table = ConfigTable();
-    options.import = ConfigLegacyImport();
-    options.header = ConfigHeader();
-    return std::make_unique<ConfigOwner<Config>>(std::move(options));
+// Where each owner reads Defaults.ini: at the built-in values, which the first load creates,
+// and with values a player changed, written from it before the tests.
+fs::path g_builtinDefaults;
+fs::path g_alteredDefaults;
+
+std::unique_ptr<ConfigOwner<Config>> NewOwner(const fs::path& dir, const fs::path& defaults) {
+    return std::make_unique<ConfigOwner<Config>>(
+        ConfigOptions(dir.wstring() + L"\\", DefaultsFile::At(defaults.wstring())));
 }
 
-// One conversion, in a folder of its own, and what it left there.
-struct Migration {
-    fs::path path;
-    ConfigLoadStatus status = ConfigLoadStatus::Canonical;
-    Config config;
-    std::vector<std::string> log;
+// A file as the tests hold it to: its bytes, its last write time and its attributes.
+struct FileStamp {
+    std::string bytes;
+    FILETIME written{};
+    DWORD attributes = 0;
+
+    bool operator==(const FileStamp& o) const {
+        return bytes == o.bytes && CompareFileTime(&written, &o.written) == 0 && attributes == o.attributes;
+    }
 };
 
-Migration Migrate(const Input& input) {
-    Migration m;
-    m.path = FreshDir() / "HeadTracking.ini";
-    if (input.present) WriteBytes(m.path, input.bytes);
-    const auto loaded = NewOwner(m.path)->Load();
-    m.status = loaded.status;
-    m.config = loaded.config;
-    m.log = loaded.log;
-    return m;
+FileStamp Stamp(const fs::path& path) {
+    WIN32_FILE_ATTRIBUTE_DATA data;
+    if (!GetFileAttributesExW(path.c_str(), GetFileExInfoStandard, &data)) {
+        throw std::runtime_error("could not stat " + path.string());
+    }
+    FileStamp s;
+    s.bytes = ReadBytes(path);
+    s.written = data.ftLastWriteTime;
+    s.attributes = data.dwFileAttributes;
+    return s;
 }
 
 std::vector<std::string> FolderListing(const fs::path& dir) {
@@ -317,7 +333,44 @@ std::vector<std::string> FolderListing(const fs::path& dir) {
     for (const fs::directory_entry& entry : fs::directory_iterator(dir)) {
         names.push_back(entry.path().filename().string());
     }
+    std::sort(names.begin(), names.end());
     return names;
+}
+
+// One migration, in a game folder of its own that holds the input as HeadTracking.ini, and
+// what it left there.
+struct Migration {
+    fs::path dir;
+    fs::path config;
+    fs::path legacy;
+    FileStamp legacyBefore;
+    ConfigLoadStatus status = ConfigLoadStatus::Canonical;
+    Config config_read;
+    std::vector<std::string> log;
+    std::string reason;
+};
+
+Migration Migrate(const Input& input, const fs::path& defaults, bool readOnly = false) {
+    Migration m;
+    m.dir = FreshDir();
+    m.config = m.dir / "CameraUnlock.ini";
+    m.legacy = m.dir / "HeadTracking.ini";
+    if (input.present) {
+        WriteBytes(m.legacy, input.bytes);
+        if (readOnly) SetFileAttributesW(m.legacy.c_str(), FILE_ATTRIBUTE_READONLY);
+        m.legacyBefore = Stamp(m.legacy);
+    }
+    const auto loaded = NewOwner(m.dir, defaults)->Load();
+    m.status = loaded.status;
+    m.config_read = loaded.config;
+    m.log = loaded.log;
+    m.reason = loaded.reason;
+    return m;
+}
+
+// Every field of a Config as the canonical renderer writes it, so two Configs compare whole.
+std::string AllValues(const Config& c) {
+    return cameraunlock::config::RenderCanonical(ConfigTable(), c, ConfigHeader());
 }
 
 // ---- the inputs -------------------------------------------------------------------------
@@ -458,11 +511,15 @@ bool Contains(const std::vector<std::string>& lines, const std::string& text) {
     return false;
 }
 
-// Comparison 2 and everything the conversion promises about the files it leaves behind.
-void TestComparisonTwoImportAgainstMigration(const std::vector<Input>& inputs) {
+// Comparison 2 and everything the conversion promises about the files it leaves behind, over
+// one Defaults.ini. `migrated` collects every distinct CameraUnlock.ini the migration wrote.
+void TestComparisonTwoImportAgainstMigration(const std::vector<Input>& inputs, const fs::path& defaults,
+                                             const char* over, std::set<std::string>& migrated) {
     const std::string committed = ReadBytes(BSI_COMMITTED_CONFIG);
+    const FileStamp defaultsBefore = Stamp(defaults);
+    const bool builtin = defaults == g_builtinDefaults;
     for (const Input& input : inputs) {
-        const std::string& n = input.name;
+        const std::string n = input.name + " (" + over + ")";
 
         const fs::path importPath = FreshDir() / "HeadTracking.ini";
         if (input.present) WriteBytes(importPath, input.bytes);
@@ -470,8 +527,22 @@ void TestComparisonTwoImportAgainstMigration(const std::vector<Input>& inputs) {
         const bool usable = legacy::Read(importPath.string().c_str(), frozen);
         const Effective i = FromLegacyFields(usable, frozen);
 
-        const Migration m = Migrate(input);
-        const Effective g = FromMigration(m.status, m.config);
+        const Migration m = Migrate(input, defaults);
+        const Effective g = FromMigration(m.status, m.config_read);
+
+        if (!input.present) {
+            // Not a migration: a fresh install, which follows Defaults.ini.
+            Check(m.status == ConfigLoadStatus::Created, n + ": no file is created");
+            Check(ReadBytes(m.config) == committed, n + ": the created file is the committed one");
+            Check(FolderListing(m.dir) == std::vector<std::string>{"CameraUnlock.ini"},
+                  n + ": the folder holds CameraUnlock.ini and nothing else");
+            if (builtin) {
+                for (const FieldDifference& d : Differences(i, g)) {
+                    Fail(n + ": " + d.field + " import=" + d.left + " created=" + d.right);
+                }
+            }
+            continue;
+        }
 
         // The approved difference: the reticle rule drops ShowAimMarker=false.
         Effective allowed = i;
@@ -481,21 +552,17 @@ void TestComparisonTwoImportAgainstMigration(const std::vector<Input>& inputs) {
         }
         ++g_checks;
 
-        // The import as the owner runs it, on a read-only copy: it writes nothing, drops the
-        // reticle setting and nothing else, and reads no pose shaping, since the published
-        // build had none left to read.
-        if (input.present) {
-            const fs::path dir = FreshDir();
-            const fs::path path = dir / "HeadTracking.ini";
-            WriteBytes(path, input.bytes);
-            SetFileAttributesW(path.c_str(), FILE_ATTRIBUTE_READONLY);
+        // Whatever happened, HeadTracking.ini keeps its bytes, its write time and its
+        // attributes, and Defaults.ini is never written.
+        Check(Stamp(m.legacy) == m.legacyBefore, n + ": HeadTracking.ini is left exactly as it was");
+        Check(Stamp(defaults) == defaultsBefore, n + ": Defaults.ini is left exactly as it was");
+
+        if (builtin) {
+            // The import as the owner runs it: it drops the reticle setting and nothing else,
+            // and reads no pose shaping, since the published build had none left to read.
             Config imported = ConfigTable().defaults();
             const ImportResult result = ConfigLegacyImport().run(
-                cameraunlock::config::LegacyInput{path.wstring(), path.string(), false}, imported);
-            Check(FolderListing(dir) == std::vector<std::string>{"HeadTracking.ini"} &&
-                      ReadBytes(path) == input.bytes,
-                  n + ": the import leaves a read-only folder as it was");
-            SetFileAttributesW(path.c_str(), FILE_ATTRIBUTE_NORMAL);
+                cameraunlock::config::LegacyInput{importPath.wstring(), importPath.string(), false}, imported);
             Check(result.pose_shaping.empty(), n + ": the import reads no pose shaping");
             if (!usable) {
                 Check(result.status == ImportStatus::Refused, n + ": the import refuses what the frozen reader refused");
@@ -509,57 +576,99 @@ void TestComparisonTwoImportAgainstMigration(const std::vector<Input>& inputs) {
             }
         }
 
-        if (!input.present) {
-            Check(m.status == ConfigLoadStatus::Created, n + ": no file is created");
-            Check(ReadBytes(m.path) == committed, n + ": the created file is the committed one");
-            continue;
-        }
-
-        const fs::path copy = fs::path(m.path.wstring() + L".pre-canonical");
+        const std::vector<std::string> legacyOnly{"HeadTracking.ini"};
         if (!usable) {
             Check(m.status == ConfigLoadStatus::LegacyRefused, n + ": a refused file is refused");
-            Check(ReadBytes(m.path) == input.bytes, n + ": a refused file keeps its bytes");
-            Check(!fs::exists(copy), n + ": a refused file gets no copy");
+            Check(FolderListing(m.dir) == legacyOnly, n + ": a refused file gets no CameraUnlock.ini");
             continue;
         }
         if (HoldsALimitPastTheCanonicalRange(frozen)) {
-            Check(m.status == ConfigLoadStatus::Deferred, n + ": a limit past 10 m defers the conversion");
-            Check(ReadBytes(m.path) == input.bytes && !fs::exists(copy), n + ": a deferred file is left as it was");
+            Check(m.status == ConfigLoadStatus::Deferred, n + ": a limit past 10 m defers the import");
+            Check(FolderListing(m.dir) == legacyOnly, n + ": a deferred import creates no CameraUnlock.ini");
+            Check(m.reason.find("[Position] PositionLimit") != std::string::npos && m.reason.find("cannot be converted") != std::string::npos,
+                  n + ": the player is told which limit stops the import: " + m.reason);
             continue;
         }
 
-        Check(m.status == ConfigLoadStatus::Migrated, n + ": the file is converted");
+        Check(m.status == ConfigLoadStatus::Migrated, n + ": the file is imported");
         if (m.status != ConfigLoadStatus::Migrated) continue;
-        Check(ReadBytes(copy) == input.bytes, n + ": .pre-canonical holds the input");
+        Check((FolderListing(m.dir) == std::vector<std::string>{"CameraUnlock.ini", "HeadTracking.ini"}),
+              n + ": the folder holds CameraUnlock.ini and HeadTracking.ini and nothing else");
+        Check(Contains(m.log, "created from"), n + ": the log says where CameraUnlock.ini came from");
         if (!frozen.show_aim_marker) {
             Check(Contains(m.log, "[General] ShowAimMarker=false"), n + ": the log names the dropped ShowAimMarker");
         }
+        const std::string written = ReadBytes(m.config);
+        migrated.insert(written);
 
-        // The migrated bytes read back with nothing to report, and render back to themselves.
-        const std::string migrated = ReadBytes(m.path);
-        const cameraunlock::config::CanonicalIni doc = cameraunlock::config::ParseCanonicalIni(migrated);
-        Config reread = ConfigTable().defaults();
-        const auto report = cameraunlock::config::ApplyCanonical(doc, ConfigTable(), reread);
-        Check(doc.IsReadable() && doc.diagnostics.empty() && report.diagnostics.empty(),
-              n + ": the migrated file reads with no diagnostic");
-        Check(cameraunlock::config::RenderCanonical(ConfigTable(), reread, ConfigHeader()) == migrated,
-              n + ": the migrated file renders back to its own bytes");
+        // The next launch reads CameraUnlock.ini over the same Defaults.ini, with nothing to
+        // report, to the same settings, does not import, and writes neither file.
+        const auto again = NewOwner(m.dir, defaults)->Load();
+        Check(again.status == ConfigLoadStatus::Canonical, n + ": the next launch reads CameraUnlock.ini");
+        Check(again.diagnostics.empty(), n + ": CameraUnlock.ini reads with no diagnostic");
+        Check(AllValues(again.config) == AllValues(m.config_read), n + ": the next launch runs on the same settings");
+        Check(!Contains(again.log, "created from"), n + ": the next launch does not import");
+        Check(Contains(again.log, "is left as it was and is not read"), n + ": the next launch says HeadTracking.ini is not read");
+        Check(ReadBytes(m.config) == written, n + ": the next launch leaves CameraUnlock.ini as it was");
+        Check(Stamp(m.legacy) == m.legacyBefore, n + ": the next launch leaves HeadTracking.ini as it was");
 
-        // A second launch reads it as canonical and writes nothing.
-        const auto again = NewOwner(m.path)->Load();
-        Check(again.status == ConfigLoadStatus::Canonical, n + ": the next launch reads the file as canonical");
-        Check(ReadBytes(m.path) == migrated && !fs::exists(fs::path(m.path.wstring() + L".pre-canonical.last")),
-              n + ": the next launch writes nothing");
+        // A read-only HeadTracking.ini imports as a writable one does and stays read-only.
+        if (builtin) {
+            const Migration r = Migrate(input, defaults, true);
+            Check(r.status == m.status && AllValues(r.config_read) == AllValues(m.config_read) &&
+                      ReadBytes(r.config) == written,
+                  n + ": a read-only HeadTracking.ini imports as a writable one does");
+            Check(Stamp(r.legacy) == r.legacyBefore && (r.legacyBefore.attributes & FILE_ATTRIBUTE_READONLY) != 0,
+                  n + ": a read-only HeadTracking.ini keeps its attribute, bytes and write time");
+            SetFileAttributesW(r.legacy.c_str(), FILE_ATTRIBUTE_NORMAL);
+        }
     }
 }
 
-// The newest published build's first-run output converts to exactly the file a fresh
-// install creates.
+// The newest published build's first-run output imports into exactly the file a fresh
+// install creates, with Defaults.ini at the built-in values.
 void TestFreshEqualsUpgrade() {
-    const Migration m = Migrate({"dev first run", true, DevFirstRun()});
-    Check(m.status == ConfigLoadStatus::Migrated, "the dev build's first-run file is converted");
-    Check(ReadBytes(m.path) == ReadBytes(BSI_COMMITTED_CONFIG),
-          "the dev build's first-run file converts to config/HeadTracking.ini");
+    const Migration m = Migrate({"dev first run", true, DevFirstRun()}, g_builtinDefaults);
+    Check(m.status == ConfigLoadStatus::Migrated, "the dev build's first-run file is imported");
+    Check(ReadBytes(m.config) == ReadBytes(BSI_COMMITTED_CONFIG),
+          "the dev build's first-run file imports into config/HeadTracking.ini, byte for byte");
+}
+
+// Defaults.ini as a player may have changed it, from the one the owner created: every value
+// differs from the built-in one, the tracking mode pair naming rotation only.
+void WriteAlteredDefaults() {
+    std::string text = ReadBytes(g_builtinDefaults);
+    for (const auto& [from, to] : std::vector<std::pair<std::string, std::string>>{
+             {"UdpPort=4242", "UdpPort=5000"},
+             {"EnableOnStartup=true", "EnableOnStartup=false"},
+             {"WorldSpaceYaw=true", "WorldSpaceYaw=false"},
+             {"PositionEnabled=true", "PositionEnabled=false"},
+             {"DataFreshnessMs=500", "DataFreshnessMs=250"},
+             {"LocalSmoothing=0.0", "LocalSmoothing=0.3"},
+             {"RemoteSmoothing=0.15", "RemoteSmoothing=0.5"},
+             {"PositionLimitX=0.3", "PositionLimitX=0.2"},
+             {"PositionLimitY=0.2", "PositionLimitY=0.15"},
+             {"PositionLimitYDown=0.2", "PositionLimitYDown=0.1"},
+             {"PositionLimitZ=0.4", "PositionLimitZ=0.25"},
+             {"PositionLimitZBack=0.1", "PositionLimitZBack=0.05"},
+             {"ToggleKey=End, Ctrl+Shift+Y", "ToggleKey=F8"},
+             {"CycleTrackingModeKey=PageUp, Ctrl+Shift+G", "CycleTrackingModeKey=F9"},
+             {"YawModeKey=PageDown, Ctrl+Shift+H", "YawModeKey=F10"}}) {
+        const std::size_t at = text.find("\r\n" + from + "\r\n");
+        if (at == std::string::npos) throw std::runtime_error("the created Defaults.ini has no line " + from);
+        text.replace(at + 2, from.size(), to);
+    }
+    fs::create_directories(g_alteredDefaults.parent_path());
+    WriteBytes(g_alteredDefaults, text);
+}
+
+// Each distinct migrated file, for lint-migrated.mjs.
+void WriteMigratedFiles(const std::set<std::string>& migrated) {
+    const fs::path dir = BSI_MIGRATED_DIR;
+    fs::remove_all(dir);
+    fs::create_directories(dir);
+    int n = 0;
+    for (const std::string& file : migrated) WriteBytes(dir / (std::to_string(n++) + ".ini"), file);
 }
 
 }  // namespace
@@ -577,15 +686,24 @@ int main(int argc, char** argv) {
     g_root = fs::path(temp) / ("bsi-config-differential-" + std::to_string(GetCurrentProcessId()));
     fs::remove_all(g_root);
     fs::create_directories(g_root);
+    g_builtinDefaults = g_root / "user-builtin" / "CameraUnlock" / "Defaults.ini";
+    g_alteredDefaults = g_root / "user-altered" / "CameraUnlock" / "Defaults.ini";
+    fs::create_directories(g_builtinDefaults.parent_path().parent_path());
 
     int exit_code = 1;
     try {
         TestTheCommittedFirstRunIsTheDevBuilds();
+        TestFreshEqualsUpgrade();
+        WriteAlteredDefaults();
         const std::vector<Input> inputs = Inputs();
         TestComparisonOneOracleAgainstImport(inputs);
-        TestComparisonTwoImportAgainstMigration(inputs);
-        TestFreshEqualsUpgrade();
-        std::printf("%zu inputs. Differences from the dev build that the comparison allows for:\n", inputs.size());
+        std::set<std::string> migrated;
+        TestComparisonTwoImportAgainstMigration(inputs, g_builtinDefaults, "Defaults.ini at the built-in values", migrated);
+        TestComparisonTwoImportAgainstMigration(inputs, g_alteredDefaults, "Defaults.ini changed", migrated);
+        WriteMigratedFiles(migrated);
+        std::printf("%zu inputs, %zu distinct migrated files. Differences from the dev build that the "
+                    "comparison allows for:\n",
+                    inputs.size(), migrated.size());
         for (const char* difference : DEV_DIFFERENCES) std::printf("  %s\n", difference);
         std::printf("%d checks, %d failures\n", g_checks, g_failures);
         exit_code = g_failures == 0 ? 0 : 1;

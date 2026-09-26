@@ -30,13 +30,16 @@ install = { cmd = "powershell -ExecutionPolicy Bypass -File scripts/deploy.ps1 R
 # Remove the mod from the game directory. /y keeps it prompt-free under pixi (no TTY).
 uninstall = "scripts/uninstall.cmd /y"
 
-# UE3 rotation maths, the head-pose composition, the aim vector, the INI boundaries and
-# the tracker-port reclaim. Compiled from source every time - never a prebuilt binary.
-test = { cmd = "ctest --test-dir build -C Release --output-on-failure", depends-on = ["build-release"] }
+# UE3 rotation maths, the head-pose composition, the aim vector, the config and its import
+# from HeadTracking.ini, and the tracker-port reclaim. Compiled from source every time - never
+# a prebuilt binary. Then core's canonical config lint over the committed file and every
+# CameraUnlock.ini the differential test migrated.
+test = { cmd = "ctest --test-dir build -C Release --output-on-failure && node tests/config_differential/lint-migrated.mjs build/tests/migrated", depends-on = ["build-release"] }
 
-# Rewrite config/HeadTracking.ini, the file the mod creates at first launch, from the config
-# table after a change to a row, a comment or a default; bsi_config_tests fails on the old
-# file until this runs. encode-seed re-encodes any launcher seed that writes the config.
+# Rewrite config/HeadTracking.ini, the committed copy of the CameraUnlock.ini the mod creates
+# at first launch, from the config table after a change to a row, a comment or a default;
+# bsi_config_tests fails on the old file until this runs. encode-seed then rewrites the
+# per_game of launcher-manifest.json's config descriptor, where there is one.
 render-config = { cmd = "build/tests/Release/bsi_config_tests.exe --render-config config/HeadTracking.ini && node cameraunlock-core/scripts/encode-seed.mjs", depends-on = ["build-release"] }
 
 # Package the installer ZIP. Installer-only: see the header of package-release.ps1 for

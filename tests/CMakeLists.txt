@@ -12,7 +12,7 @@ add_executable(bsi_tests
     test_main.cpp
 )
 
-# The INI in the canonical format: the committed file against the table (its
+# CameraUnlock.ini, the canonical config: the committed file against the table (its
 # --render-config mode is what `pixi run render-config` runs), what the table reads, and
 # the rows a hotkey may save. Needs the real config owner on real files.
 add_executable(bsi_config_tests
@@ -45,7 +45,7 @@ add_executable(bsi_memory_tests
 
 # The config conversion's differential test: the dev build's reader (the oracle, byte copies
 # of 128e9d4's files in config_differential/oracle) against the frozen reader in
-# src/legacy_config, and that against the conversion itself. The oracle is compiled with its namespace renamed so its Config can sit
+# src/legacy_config, and that against the import of HeadTracking.ini into CameraUnlock.ini. The oracle is compiled with its namespace renamed so its Config can sit
 # beside the runtime's in one binary, and against the core ADS headers it included at its
 # pin, which core has since removed.
 set(BSI_DIFFERENTIAL_DIR ${CMAKE_CURRENT_SOURCE_DIR}/config_differential)
@@ -61,8 +61,11 @@ set_source_files_properties(${BSI_DIFFERENTIAL_DIR}/oracle/config.cpp PROPERTIES
 target_include_directories(bsi_config_differential_tests BEFORE PRIVATE
     ${BSI_DIFFERENTIAL_DIR}/oracle/core-c480d8a)
 target_include_directories(bsi_config_differential_tests PRIVATE ${BSI_DIFFERENTIAL_DIR})
+# The test writes every distinct CameraUnlock.ini it migrated to BSI_MIGRATED_DIR, and
+# `pixi run test` then runs core's canonical config lint over them (lint-migrated.mjs).
 target_compile_definitions(bsi_config_differential_tests PRIVATE
-    BSI_DIFFERENTIAL_DATA_DIR="${BSI_DIFFERENTIAL_DIR}/data")
+    BSI_DIFFERENTIAL_DATA_DIR="${BSI_DIFFERENTIAL_DIR}/data"
+    BSI_MIGRATED_DIR="${CMAKE_CURRENT_BINARY_DIR}/migrated")
 
 # What the differential test compiles is pinned by hash, line endings aside: the oracle's
 # files must stay the published build's (git show 128e9d4:src/<file>, and core c480d8a's

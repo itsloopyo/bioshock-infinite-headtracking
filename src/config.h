@@ -5,7 +5,9 @@
 #include <string_view>
 
 #include "cameraunlock/config/config_concepts.g.h"
+#include "cameraunlock/config/config_owner.h"
 #include "cameraunlock/config/config_table.h"
+#include "cameraunlock/config/defaults_file.h"
 #include "cameraunlock/config/legacy_import.h"
 #include "cameraunlock/config/value_codecs.h"
 #include "cameraunlock/data/position_settings.h"
@@ -13,7 +15,7 @@
 
 namespace BioShockInfiniteHeadTracking {
 
-// The settings, as HeadTracking.ini holds them. The member initialisers are the defaults:
+// The settings, as CameraUnlock.ini holds them. The member initialisers are the defaults:
 // the table below renders them into the file the mod creates at first launch, and a key
 // missing from the file reads as its member's initialiser.
 struct Config {
@@ -84,14 +86,21 @@ private:
     cameraunlock::config::FloatCodec angle_{0.0f, kMax};
 };
 
-// The rows of HeadTracking.ini. Only the tracking mode pair and WorldSpaceYaw are Writable:
+// The rows of CameraUnlock.ini. Only the tracking mode pair and WorldSpaceYaw are Writable:
 // the mode and yaw hotkeys save the player's choice, and End changes the session only.
 cameraunlock::config::ConfigTable<Config> ConfigTable();
 
 // What the renderer writes above the settings.
 cameraunlock::config::RenderHeader ConfigHeader();
 
-// The file as the last pre-canonical build read it (src/legacy_config), mapped into Config.
+// HeadTracking.ini as the last pre-canonical build read it (src/legacy_config), mapped into
+// Config.
 cameraunlock::config::LegacyImport<Config> ConfigLegacyImport();
+
+// The owner's options for the files in `folder` (with its trailing separator): the settings in
+// CameraUnlock.ini, imported once from HeadTracking.ini, the file every earlier build read and
+// that is never written. The mod passes DefaultsFile::PerUser() and a test a scratch file.
+cameraunlock::config::ConfigOwnerOptions<Config> ConfigOptions(const std::wstring& folder,
+                                                               cameraunlock::config::DefaultsFile defaults);
 
 }  // namespace BioShockInfiniteHeadTracking

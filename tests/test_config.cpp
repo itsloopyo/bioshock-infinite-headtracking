@@ -1,12 +1,13 @@
-// HeadTracking.ini as the canonical config format: the file the mod creates, what its
-// table reads, which rows a hotkey may save, and that a save touches nothing else.
+// CameraUnlock.ini, the canonical config file: the file the mod creates, what its table
+// reads, which rows a hotkey may save, that a save touches nothing else, and how the rows
+// set to default follow Defaults.ini.
 //
-// The conversion of an older file is tests/config_differential/'s job; this suite covers
-// the canonical file from its first launch on.
+// The import of HeadTracking.ini, the file earlier versions read, is
+// tests/config_differential/'s job; this suite covers CameraUnlock.ini from its first launch on.
 //
-// `bsi_config_tests --render-config <path>` writes the file the table renders from its
-// defaults to <path> and runs nothing else. `pixi run render-config` uses it to rewrite
-// config/HeadTracking.ini, which TestTheCommittedFileIsTheRenderedDefaults holds to the code.
+// `bsi_config_tests --render-config <path>` writes the table's fresh render to <path> and
+// runs nothing else. `pixi run render-config` uses it to rewrite config/HeadTracking.ini, the
+// committed copy, which TestTheCommittedFileIsTheFreshRender holds to the code.
 
 #include <windows.h>
 
@@ -16,6 +17,7 @@
 #include <fstream>
 #include <iterator>
 #include <memory>
+#include <utility>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -33,8 +35,8 @@ namespace fs = std::filesystem;
 using namespace BioShockInfiniteHeadTracking;
 using cameraunlock::config::ConfigLoadStatus;
 using cameraunlock::config::ConfigOwner;
-using cameraunlock::config::ConfigOwnerOptions;
 using cameraunlock::config::ConfigSaveStatus;
+using cameraunlock::config::DefaultsFile;
 
 int g_failures = 0;
 int g_checks = 0;
@@ -60,26 +62,42 @@ void WriteBytes(const fs::path& path, const std::string& bytes) {
     if (!out) throw std::runtime_error("could not write " + path.string());
 }
 
-std::string Rendered(const Config& config) {
-    return cameraunlock::config::RenderCanonical(ConfigTable(), config, ConfigHeader());
-}
+std::string FreshRender() { return cameraunlock::config::RenderCanonicalFresh(ConfigTable(), ConfigHeader()); }
 
 fs::path g_root;
 int g_next_dir = 0;
 
-fs::path FreshIni() {
-    const fs::path dir = g_root / std::to_string(g_next_dir++);
-    fs::create_directories(dir);
-    return dir / "HeadTracking.ini";
+// A game folder of its own, and a Defaults.ini of its own outside it, which the first Load
+// creates at the built-in values unless the test writes one first.
+struct Folder {
+    fs::path dir;
+    fs::path config;
+    fs::path legacy;
+    fs::path defaults;
+};
+
+Folder FreshFolder() {
+    Folder f;
+    const fs::path root = g_root / std::to_string(g_next_dir++);
+    f.dir = root / "game";
+    fs::create_directories(f.dir);
+    fs::create_directories(root / "user");
+    f.config = f.dir / "CameraUnlock.ini";
+    f.legacy = f.dir / "HeadTracking.ini";
+    f.defaults = root / "user" / "CameraUnlock" / "Defaults.ini";
+    return f;
 }
 
-std::unique_ptr<ConfigOwner<Config>> NewOwner(const fs::path& path) {
-    ConfigOwnerOptions<Config> options;
-    options.path = path.wstring();
-    options.table = ConfigTable();
-    options.import = ConfigLegacyImport();
-    options.header = ConfigHeader();
-    return std::make_unique<ConfigOwner<Config>>(std::move(options));
+std::unique_ptr<ConfigOwner<Config>> NewOwner(const Folder& f) {
+    return std::make_unique<ConfigOwner<Config>>(
+        ConfigOptions(f.dir.wstring() + L"\\", DefaultsFile::At(f.defaults.wstring())));
+}
+
+bool Contains(const std::vector<std::string>& lines, const std::string& text) {
+    for (const std::string& line : lines) {
+        if (line.find(text) != std::string::npos) return true;
+    }
+    return false;
 }
 
 // The lines of `after` that differ from `before`, which must have as many lines.
@@ -108,8 +126,21 @@ std::vector<std::string> ChangedLines(const std::string& before, const std::stri
 
 // ---- the file --------------------------------------------------------------------------
 
-void TestTheCommittedFileIsTheRenderedDefaults() {
-    CHECK(ReadBytes(BSI_COMMITTED_CONFIG) == Rendered(ConfigTable().defaults()));
+void TestTheCommittedFileIsTheFreshRender() {
+    CHECK(ReadBytes(BSI_COMMITTED_CONFIG) == FreshRender());
+}
+
+// Every global row the game binds is written as default, and the game's own rows as values.
+void TestTheFreshFileFollowsDefaultsIniOnEveryGlobalRow() {
+    const std::string fresh = FreshRender();
+    for (const char* line : {"UdpPort=default", "EnableOnStartup=default", "WorldSpaceYaw=default",
+                             "RotationEnabled=default", "DataFreshnessMs=default", "LocalSmoothing=default",
+                             "RemoteSmoothing=default", "PositionEnabled=default", "PositionLimitX=default",
+                             "PositionLimitY=default", "PositionLimitYDown=default", "PositionLimitZ=default",
+                             "PositionLimitZBack=default", "ToggleKey=default", "CycleTrackingModeKey=default",
+                             "YawModeKey=default", "Fov=0.0", "StateProbe=false", "AimGeometry=false"}) {
+        CHECK(fresh.find(std::string("\r\n") + line + "\r\n") != std::string::npos);
+    }
 }
 
 // The shipped defaults as literals, so a core bump that moves one of core's constants
@@ -226,29 +257,74 @@ void TestThePreCanonicalKeysAreNotRead() {
 
 // ---- what the owner writes --------------------------------------------------------------
 
+// With no file in the folder, the first launch creates CameraUnlock.ini as committed and
+// Defaults.ini at the built-in values, runs on those values, and creates no HeadTracking.ini.
 void TestFirstLaunchCreatesTheCommittedFile() {
-    const fs::path path = FreshIni();
-    const auto owner = NewOwner(path);
-    CHECK(owner->Load().status == ConfigLoadStatus::Created);
-    CHECK(ReadBytes(path) == ReadBytes(BSI_COMMITTED_CONFIG));
+    const Folder f = FreshFolder();
+    const auto loaded = NewOwner(f)->Load();
+    CHECK(loaded.status == ConfigLoadStatus::Created);
+    CHECK(ReadBytes(f.config) == ReadBytes(BSI_COMMITTED_CONFIG));
+    CHECK(fs::exists(f.defaults));
+    CHECK(!fs::exists(f.legacy));
+    CHECK(cameraunlock::config::RenderCanonical(ConfigTable(), loaded.config, ConfigHeader()) ==
+          cameraunlock::config::RenderCanonical(ConfigTable(), ConfigTable().defaults(), ConfigHeader()));
+}
+
+// A row set to default takes Defaults.ini's value, the tracking mode pair included, and a
+// row the file sets keeps its own.
+void TestDefaultRowsFollowDefaultsIni() {
+    const Folder f = FreshFolder();
+    NewOwner(f)->Load();
+    std::string global = ReadBytes(f.defaults);
+    for (const auto& [from, to] : std::vector<std::pair<std::string, std::string>>{
+             {"UdpPort=4242", "UdpPort=5000"},
+             {"WorldSpaceYaw=true", "WorldSpaceYaw=false"},
+             {"PositionEnabled=true", "PositionEnabled=false"},
+             {"PositionLimitZ=0.4", "PositionLimitZ=0.25"},
+             {"ToggleKey=End, Ctrl+Shift+Y", "ToggleKey=F8"}}) {
+        const std::size_t at = global.find(from + "\r\n");
+        CHECK(at != std::string::npos);
+        if (at != std::string::npos) global.replace(at, from.size(), to);
+    }
+    WriteBytes(f.defaults, global);
+    std::string file = ReadBytes(f.config);
+    const std::string yaw = "WorldSpaceYaw=default";
+    file.replace(file.find(yaw), yaw.size(), "WorldSpaceYaw=true");
+    WriteBytes(f.config, file);
+
+    const auto loaded = NewOwner(f)->Load();
+    CHECK(loaded.status == ConfigLoadStatus::Canonical);
+    CHECK(loaded.config.udp_port == 5000);
+    CHECK(loaded.config.world_space_yaw);
+    CHECK(loaded.config.rotation_enabled && !loaded.config.position_enabled);
+    CHECK(loaded.config.pos_limit_z == 0.25f);
+    CHECK(loaded.config.toggle_key == "F8");
+    CHECK(ReadBytes(f.config) == file);
+    CHECK(ReadBytes(f.defaults) == global);
 }
 
 // A save changes the lines of its rows and not one other byte, and the next launch reads
-// what was saved. The tracking mode is always written as the pair.
+// what was saved. The tracking mode is always written as the pair. A row that held default
+// is written as a value, the log says it no longer follows Defaults.ini, and Defaults.ini is
+// never written.
 void TestTheModeAndYawKeysSaveTheirRowsOnly() {
-    const fs::path path = FreshIni();
-    const auto owner = NewOwner(path);
+    const Folder f = FreshFolder();
+    const fs::path& path = f.config;
+    const auto owner = NewOwner(f);
     owner->Load();
     const std::string created = ReadBytes(path);
+    const std::string global = ReadBytes(f.defaults);
 
     const cameraunlock::TrackingModeChannels positionOnly =
         cameraunlock::EncodeTrackingMode(cameraunlock::TrackingMode::PositionOnly);
-    CHECK(owner->Save([&](Config& c) {
-                   c.rotation_enabled = positionOnly.rotation_enabled;
-                   c.position_enabled = positionOnly.position_enabled;
-               }).status == ConfigSaveStatus::Saved);
+    const auto modeSave = owner->Save([&](Config& c) {
+        c.rotation_enabled = positionOnly.rotation_enabled;
+        c.position_enabled = positionOnly.position_enabled;
+    });
+    CHECK(modeSave.status == ConfigSaveStatus::Saved);
+    CHECK(Contains(modeSave.log, "RotationEnabled=false is now set for this game, and no longer follows Defaults.ini"));
     const std::string moded = ReadBytes(path);
-    CHECK((ChangedLines(created, moded) == std::vector<std::string>{"RotationEnabled=false"}));
+    CHECK((ChangedLines(created, moded) == std::vector<std::string>{"RotationEnabled=false", "PositionEnabled=true"}));
 
     const cameraunlock::TrackingModeChannels rotationOnly =
         cameraunlock::EncodeTrackingMode(cameraunlock::TrackingMode::RotationOnly);
@@ -257,14 +333,16 @@ void TestTheModeAndYawKeysSaveTheirRowsOnly() {
                    c.position_enabled = rotationOnly.position_enabled;
                }).status == ConfigSaveStatus::Saved);
     const std::string cycled = ReadBytes(path);
-    CHECK((ChangedLines(created, cycled) == std::vector<std::string>{"PositionEnabled=false"}));
+    CHECK((ChangedLines(created, cycled) == std::vector<std::string>{"RotationEnabled=true", "PositionEnabled=false"}));
 
-    CHECK(owner->Save([](Config& c) { c.world_space_yaw = false; }).status == ConfigSaveStatus::Saved);
+    const auto yawSave = owner->Save([](Config& c) { c.world_space_yaw = false; });
+    CHECK(yawSave.status == ConfigSaveStatus::Saved);
+    CHECK(Contains(yawSave.log, "WorldSpaceYaw=false is now set for this game, and no longer follows Defaults.ini"));
     const std::string yawed = ReadBytes(path);
     CHECK((ChangedLines(cycled, yawed) == std::vector<std::string>{"WorldSpaceYaw=false"}));
+    CHECK(ReadBytes(f.defaults) == global);
 
-
-    const auto next = NewOwner(path);
+    const auto next = NewOwner(f);
     const auto loaded = next->Load();
     CHECK(loaded.status == ConfigLoadStatus::Canonical);
     CHECK(loaded.config.rotation_enabled && !loaded.config.position_enabled);
@@ -275,8 +353,9 @@ void TestTheModeAndYawKeysSaveTheirRowsOnly() {
 // End changes the session only, so EnableOnStartup is not a row a save may change; nor is
 // anything else a hotkey does not set.
 void TestOnlyTheModeAndYawRowsAreWritable() {
-    const fs::path path = FreshIni();
-    const auto owner = NewOwner(path);
+    const Folder f = FreshFolder();
+    const fs::path& path = f.config;
+    const auto owner = NewOwner(f);
     owner->Load();
     const std::string created = ReadBytes(path);
     int refused = 0;
@@ -301,7 +380,7 @@ void TestOnlyTheModeAndYawRowsAreWritable() {
 
 int main(int argc, char** argv) {
     if (argc == 3 && std::strcmp(argv[1], "--render-config") == 0) {
-        WriteBytes(argv[2], Rendered(ConfigTable().defaults()));
+        WriteBytes(argv[2], FreshRender());
         return 0;
     }
 
@@ -313,13 +392,15 @@ int main(int argc, char** argv) {
 
     int exit_code = 1;
     try {
-        TestTheCommittedFileIsTheRenderedDefaults();
+        TestTheCommittedFileIsTheFreshRender();
+        TestTheFreshFileFollowsDefaultsIniOnEveryGlobalRow();
         TestTheDefaultsAreTheDocumentedNumbers();
         TestTheDefaultKeyListsParse();
         TestHandEditedValuesAreRead();
         TestFovOutsideItsRangeKeepsTheGamesAngle();
         TestThePreCanonicalKeysAreNotRead();
         TestFirstLaunchCreatesTheCommittedFile();
+        TestDefaultRowsFollowDefaultsIni();
         TestTheModeAndYawKeysSaveTheirRowsOnly();
         TestOnlyTheModeAndYawRowsAreWritable();
         std::printf("%d checks, %d failures\n", g_checks, g_failures);

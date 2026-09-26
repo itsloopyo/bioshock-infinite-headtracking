@@ -53,7 +53,7 @@ T& NeverDestroyed() {
 Config& g_config = NeverDestroyed<Config>();
 TrackingRuntime& g_tracking = NeverDestroyed<TrackingRuntime>();
 Hotkeys& g_hotkeys = NeverDestroyed<Hotkeys>();
-// The one reader and writer of HeadTracking.ini, built on the init thread once the path is
+// The one reader and writer of CameraUnlock.ini, built on the init thread once the folder is
 // known and, like the objects above, never destroyed.
 cameraunlock::config::ConfigOwner<Config>* g_configOwner = nullptr;
 
@@ -198,23 +198,19 @@ void LogConfigLines(const std::vector<std::string>& lines) {
     }
 }
 
-// Reads HeadTracking.ini through its owner, converting a file an earlier version wrote.
-// False where the mod must stay dormant: the earlier version's reader refused the file,
-// and that version stayed dormant on it too.
-bool LoadConfig(const std::wstring& iniPath) {
-    cameraunlock::config::ConfigOwnerOptions<Config> options;
-    options.path = iniPath;
-    options.table = ConfigTable();
-    options.import = ConfigLegacyImport();
-    options.header = ConfigHeader();
+// Reads CameraUnlock.ini through its owner, importing HeadTracking.ini, the file an earlier
+// version read, when CameraUnlock.ini is absent. False where the mod must stay dormant: the
+// earlier version's reader refused the file, and that version stayed dormant on it too.
+bool LoadConfig(const std::wstring& folder) {
+    cameraunlock::config::ConfigOwnerOptions<Config> options =
+        ConfigOptions(folder, cameraunlock::config::DefaultsFile::PerUser());
+    // The log is the only place this mod can tell the player anything.
+    options.status_sink = [](const std::string& message) { Log::Line("WARN: %s", message.c_str()); };
     g_configOwner = new cameraunlock::config::ConfigOwner<Config>(std::move(options));
 
     const cameraunlock::config::ConfigLoadResult<Config> loaded = g_configOwner->Load();
     LogConfigLines(loaded.log);
     Log::Line("Config: %s", cameraunlock::config::ConfigLoadStatusName(loaded.status));
-    if (!loaded.reason.empty()) {
-        Log::Line("WARN: %s", loaded.reason.c_str());
-    }
     if (loaded.status == cameraunlock::config::ConfigLoadStatus::LegacyRefused) {
         return false;
     }
@@ -223,13 +219,12 @@ bool LoadConfig(const std::wstring& iniPath) {
 }
 
 // The mode and yaw hotkeys save the state they switched to. It is already applied, so a
-// save that fails leaves the session on it and says so.
+// save that fails leaves the session on it; the status sink has logged why.
 void LogSave(const char* what, const cameraunlock::config::ConfigSaveResult& saved) {
-    if (saved.status == cameraunlock::config::ConfigSaveStatus::Saved) {
-        return;
-    }
     LogConfigLines(saved.log);
-    Log::Line("WARN: %s The %s applies for this session.", saved.reason.c_str(), what);
+    if (saved.status != cameraunlock::config::ConfigSaveStatus::Saved) {
+        Log::Line("WARN: the %s applies for this session.", what);
+    }
 }
 
 void SaveTrackingMode(cameraunlock::TrackingMode mode) {
@@ -265,21 +260,22 @@ void GoInert() {
 DWORD WINAPI InitThread(LPVOID) {
     Log::Line("BioShock Infinite Head Tracking " HEADTRACKING_VERSION " starting");
 
-    const std::wstring iniPath = GetModulePathW("HeadTracking.ini");
-    if (iniPath.empty()) {
-        Log::Line("ERROR: this mod's own folder could not be resolved, so HeadTracking.ini "
+    const std::wstring folder = GetModuleDirectoryW();
+    if (folder.empty()) {
+        Log::Line("ERROR: this mod's own folder could not be resolved, so CameraUnlock.ini "
                   "cannot be located. Staying dormant.");
         return 0;
     }
     // A thread procedure: an exception escaping it ends the game with no word in the log.
     // The owner throws only for a defect in the table or the import, never for a file.
     try {
-        if (!LoadConfig(iniPath)) {
-            Log::Line("ERROR: HeadTracking.ini was not usable. Staying dormant.");
+        if (!LoadConfig(folder)) {
+            Log::Line("ERROR: HeadTracking.ini was not imported: the earlier version refused it "
+                      "too. Staying dormant.");
             return 0;
         }
     } catch (const std::exception& e) {
-        Log::Line("ERROR: reading HeadTracking.ini failed: %s. Staying dormant.", e.what());
+        Log::Line("ERROR: reading CameraUnlock.ini failed: %s. Staying dormant.", e.what());
         return 0;
     }
     ReportConfig();
