@@ -250,11 +250,30 @@ std::vector<FieldDifference> Differences(const Effective& a, const Effective& b)
 fs::path g_root;
 int g_next_dir = 0;
 
+std::vector<fs::path> g_made;
+
 fs::path FreshDir() {
     const fs::path dir = g_root / std::to_string(g_next_dir++);
     fs::create_directories(dir);
+    g_made.push_back(dir);
     return dir;
 }
+
+// Removes every folder FreshDir made since the last sweep, so a run over the whole corpus
+// holds one input's folders at a time rather than several thousand.
+struct SweepFolders {
+    SweepFolders() = default;
+    SweepFolders(const SweepFolders&) = delete;
+    SweepFolders& operator=(const SweepFolders&) = delete;
+    ~SweepFolders() {
+        for (const fs::path& dir : g_made) {
+            std::error_code error;
+            fs::remove_all(dir, error);
+            if (error) Fail("could not remove " + dir.string() + ": " + error.message());
+        }
+        g_made.clear();
+    }
+};
 
 void WriteBytes(const fs::path& path, const std::string& bytes) {
     std::ofstream out(path, std::ios::binary | std::ios::trunc);
@@ -484,6 +503,7 @@ const char* const DEV_DIFFERENCES[] = {
 
 void TestComparisonOneOracleAgainstImport(const std::vector<Input>& inputs) {
     for (const Input& input : inputs) {
+        const SweepFolders sweep;
         const Effective o = ReadOracle(input);
         const Effective i = ReadImport(input);
         for (const FieldDifference& d : Differences(o, i)) {
@@ -519,6 +539,7 @@ void TestComparisonTwoImportAgainstMigration(const std::vector<Input>& inputs, c
     const FileStamp defaultsBefore = Stamp(defaults);
     const bool builtin = defaults == g_builtinDefaults;
     for (const Input& input : inputs) {
+        const SweepFolders sweep;
         const std::string n = input.name + " (" + over + ")";
 
         const fs::path importPath = FreshDir() / "HeadTracking.ini";
@@ -590,7 +611,8 @@ void TestComparisonTwoImportAgainstMigration(const std::vector<Input>& inputs, c
             continue;
         }
 
-        Check(m.status == ConfigLoadStatus::Migrated, n + ": the file is imported");
+        Check(m.status == ConfigLoadStatus::Migrated, n + ": the file is imported, status " +
+                                                          std::to_string(static_cast<int>(m.status)) + ": " + m.reason);
         if (m.status != ConfigLoadStatus::Migrated) continue;
         Check((FolderListing(m.dir) == std::vector<std::string>{"CameraUnlock.ini", "HeadTracking.ini"}),
               n + ": the folder holds CameraUnlock.ini and HeadTracking.ini and nothing else");
