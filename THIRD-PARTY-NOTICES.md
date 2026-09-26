@@ -133,7 +133,7 @@ into the mod DLL, and `install.cmd` / `uninstall.cmd` are thin wrappers that run
 core's script bodies staged into the release ZIP under `shared/`. MIT requires its
 notice to travel with those copies, so the full text is reproduced below.
 
-- **Version:** commit `befb88eef8bf0c8238d49b1e4d709578052d5590`
+- **Version:** commit `def74d7107d1823340931cbc41e474cc652826f5`
 - **License:** MIT
 - **Upstream:** https://github.com/itsloopyo/cameraunlock-core
 - **Usage:** Supplies the pose pipeline, camera and smoothing headers compiled into the mod DLL, and the install and uninstall script bodies the release ZIP's wrappers dispatch to.
