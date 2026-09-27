@@ -13,10 +13,12 @@
 //
 // Comparison 1, oracle against import, finds only DEV_DIFFERENCES, each with its commit.
 // Comparison 2, import against migration, finds only what data/config-format.json in core
-// approves: here the reticle rule, which drops [General] ShowAimMarker=false because the
-// game's crosshair now always follows the aim. It runs twice, once over a Defaults.ini at the
-// built-in values and once over one a player changed, since the migration writes default
-// exactly where the imported value equals what Defaults.ini gives.
+// approves: the reticle rule, which drops [General] ShowAimMarker=false because the game's
+// crosshair now always follows the aim, N3, which unbinds a nav key on a Ctrl, Shift or Alt
+// key alone, and the owner rule of 2026-09-26 that a setting the player never changed from
+// what the published build shipped follows Defaults.ini. It runs twice, once over a
+// Defaults.ini at the built-in values and once over one a player changed, where every row the
+// player never changed takes Defaults.ini's value and every other row keeps the player's.
 //
 // The distinct migrated files go to BSI_MIGRATED_DIR, where lint-migrated.mjs runs core's
 // canonical config lint over them after this binary.
@@ -74,6 +76,7 @@ using cameraunlock::config::DropRule;
 using cameraunlock::config::ImportResult;
 using cameraunlock::config::ImportStatus;
 using cameraunlock::config::LegacyKey;
+using cameraunlock::config::schema::Concept;
 using cameraunlock::config::testing::ChordSwitch;
 using cameraunlock::config::testing::IniMutation;
 using cameraunlock::config::testing::MutationKey;
@@ -243,6 +246,78 @@ std::vector<FieldDifference> Differences(const Effective& a, const Effective& b)
 #undef BSI_FIELD
 #undef BSI_FLOAT
     return out;
+}
+
+// The rows the player never changed, derived here from what the frozen reader read against
+// the build's own defaults, independently of the import: each follows Defaults.ini. A hotkey
+// row is its nav key and its chord switch together, and the tracking mode pair is one unit.
+std::set<Concept> Untouched(const legacy::Config& c) {
+    const legacy::Config d;
+    std::set<Concept> out;
+    const auto add = [&out](Concept id, bool same) {
+        if (same) out.insert(id);
+    };
+    add(Concept::UdpPort, c.udp_port == d.udp_port);
+    add(Concept::EnableOnStartup, c.enabled_on_startup == d.enabled_on_startup);
+    add(Concept::WorldSpaceYaw, c.world_space_yaw == d.world_space_yaw);
+    add(Concept::RotationEnabled, c.position_enabled == d.position_enabled);
+    add(Concept::PositionEnabled, c.position_enabled == d.position_enabled);
+    add(Concept::DataFreshnessMs, c.data_freshness_ms == d.data_freshness_ms);
+    add(Concept::LocalSmoothing, c.local_smoothing == d.local_smoothing);
+    add(Concept::RemoteSmoothing, c.remote_smoothing == d.remote_smoothing);
+    add(Concept::PositionLimitX, c.pos_limit_x == d.pos_limit_x);
+    add(Concept::PositionLimitY, c.pos_limit_y == d.pos_limit_y);
+    add(Concept::PositionLimitYDown, c.pos_limit_y_down == d.pos_limit_y_down);
+    add(Concept::PositionLimitZ, c.pos_limit_z == d.pos_limit_z);
+    add(Concept::PositionLimitZBack, c.pos_limit_z_back == d.pos_limit_z_back);
+    add(Concept::ToggleKey, c.vk_toggle == d.vk_toggle && c.chord_toggle == d.chord_toggle);
+    add(Concept::CycleTrackingModeKey, c.vk_cycle_mode == d.vk_cycle_mode && c.chord_cycle_mode == d.chord_cycle_mode);
+    add(Concept::YawModeKey, c.vk_yaw_mode == d.vk_yaw_mode && c.chord_yaw_mode == d.chord_yaw_mode);
+    return out;
+}
+
+// Every row of the table that follows Defaults.ini.
+std::set<Concept> AllGlobalRows() { return Untouched(legacy::Config{}); }
+
+// The INI key each global row is written under.
+std::string RowKey(Concept id) {
+    return std::string(cameraunlock::config::schema::kConcepts[static_cast<std::size_t>(id)].name);
+}
+
+bool IsModifierKey(int vk) { return (vk >= 0x10 && vk <= 0x12) || (vk >= 0xA0 && vk <= 0xA5); }
+
+// N3: a nav key on a Ctrl, Shift or Alt key alone imports as unbound, and its chord stays.
+void UnbindModifierKeys(std::vector<KeyBinding>& list) {
+    list.erase(std::remove_if(list.begin(), list.end(),
+                              [](const KeyBinding& b) {
+                                  return b.modifiers == KeyModifiers::kNone && IsModifierKey(b.vk);
+                              }),
+               list.end());
+}
+
+// What the migration may run on: the import's reading, with each untouched row at what
+// Defaults.ini gives, which `defaults` holds as the owner reads it with no config file.
+Effective Expected(Effective e, const std::set<Concept>& untouched, const Effective& defaults) {
+    UnbindModifierKeys(e.toggle);
+    UnbindModifierKeys(e.cycle_mode);
+    UnbindModifierKeys(e.yaw_mode);
+    const auto has = [&untouched](Concept id) { return untouched.count(id) != 0; };
+    if (has(Concept::UdpPort)) e.udp_port = defaults.udp_port;
+    if (has(Concept::EnableOnStartup)) e.enabled_on_startup = defaults.enabled_on_startup;
+    if (has(Concept::WorldSpaceYaw)) e.world_space_yaw = defaults.world_space_yaw;
+    if (has(Concept::RotationEnabled)) e.mode = defaults.mode;
+    if (has(Concept::DataFreshnessMs)) e.data_freshness_ms = defaults.data_freshness_ms;
+    if (has(Concept::LocalSmoothing)) e.local_smoothing = defaults.local_smoothing;
+    if (has(Concept::RemoteSmoothing)) e.remote_smoothing = defaults.remote_smoothing;
+    if (has(Concept::PositionLimitX)) e.pos_limit_x = defaults.pos_limit_x;
+    if (has(Concept::PositionLimitY)) e.pos_limit_y = defaults.pos_limit_y;
+    if (has(Concept::PositionLimitYDown)) e.pos_limit_y_down = defaults.pos_limit_y_down;
+    if (has(Concept::PositionLimitZ)) e.pos_limit_z = defaults.pos_limit_z;
+    if (has(Concept::PositionLimitZBack)) e.pos_limit_z_back = defaults.pos_limit_z_back;
+    if (has(Concept::ToggleKey)) e.toggle = defaults.toggle;
+    if (has(Concept::CycleTrackingModeKey)) e.cycle_mode = defaults.cycle_mode;
+    if (has(Concept::YawModeKey)) e.yaw_mode = defaults.yaw_mode;
+    return e;
 }
 
 // ---- files ------------------------------------------------------------------------------
@@ -473,6 +548,22 @@ std::vector<Input> Inputs() {
         out.push_back({std::string("dev first run, ") + limit, true, bytes});
     }
 
+    // A nav key on a Ctrl, Shift or Alt key alone, which N3 unbinds, with the chord on and off.
+    for (const char* line : {"Toggle=0x10", "CycleMode=0xA2", "YawMode=0x12"}) {
+        for (const bool chord : {true, false}) {
+            std::string bytes = first_run;
+            const std::string key = std::string(line).substr(0, std::string(line).find('=') + 1);
+            std::size_t at = bytes.find("\r\n" + key) + 2;
+            bytes.replace(at, bytes.find_first_of("\r\n", at) - at, line);
+            if (!chord) {
+                const std::string chordLine = "Chord" + key + "1";
+                at = bytes.find(chordLine);
+                bytes.replace(at, chordLine.size(), "Chord" + key + "0");
+            }
+            out.push_back({std::string("dev first run, ") + line + (chord ? "" : ", chord off"), true, bytes});
+        }
+    }
+
     for (IniMutation& m : cameraunlock::config::testing::GenerateIniMutations(first_run, ReadKeys(),
                                                                             KeyDescriptors())) {
         out.push_back({std::move(m.name), true, std::move(m.bytes)});
@@ -536,8 +627,12 @@ bool Contains(const std::vector<std::string>& lines, const std::string& text) {
 void TestComparisonTwoImportAgainstMigration(const std::vector<Input>& inputs, const fs::path& defaults,
                                              const char* over, std::set<std::string>& migrated) {
     const std::string committed = ReadBytes(BSI_COMMITTED_CONFIG);
-    const FileStamp defaultsBefore = Stamp(defaults);
     const bool builtin = defaults == g_builtinDefaults;
+    // What Defaults.ini gives each row, as the owner reads it in a folder with no config file.
+    const Migration fresh = Migrate({"no file", false, {}}, defaults);
+    Check(fresh.status == ConfigLoadStatus::Created, std::string("a fresh install over ") + over + " creates its file");
+    const Effective defaultValues = FromMigration(fresh.status, fresh.config_read);
+    const FileStamp defaultsBefore = Stamp(defaults);
     for (const Input& input : inputs) {
         const SweepFolders sweep;
         const std::string n = input.name + " (" + over + ")";
@@ -565,8 +660,11 @@ void TestComparisonTwoImportAgainstMigration(const std::vector<Input>& inputs, c
             continue;
         }
 
-        // The approved difference: the reticle rule drops ShowAimMarker=false.
-        Effective allowed = i;
+        // The approved differences: the reticle rule drops ShowAimMarker=false, N3 unbinds a
+        // nav key on a modifier alone, and an untouched row takes what Defaults.ini gives,
+        // in a deferred import's session too.
+        const std::set<Concept> untouched = Untouched(frozen);
+        Effective allowed = usable ? Expected(i, untouched, defaultValues) : i;
         if (usable) allowed.show_aim_marker = true;
         for (const FieldDifference& d : Differences(allowed, g)) {
             Fail(n + ": " + d.field + " import=" + d.left + " migration=" + d.right);
@@ -579,8 +677,10 @@ void TestComparisonTwoImportAgainstMigration(const std::vector<Input>& inputs, c
         Check(Stamp(defaults) == defaultsBefore, n + ": Defaults.ini is left exactly as it was");
 
         if (builtin) {
-            // The import as the owner runs it: it drops the reticle setting and nothing else,
-            // and reads no pose shaping, since the published build had none left to read.
+            // The import as the owner runs it: it drops a nav key on a modifier alone by N3
+            // and ShowAimMarker=false by the reticle rule, and nothing else, reads no pose
+            // shaping, since the published build had none left to read, and leaves to
+            // Defaults.ini exactly the rows the player never changed.
             Config imported = ConfigTable().defaults();
             const ImportResult result = ConfigLegacyImport().run(
                 cameraunlock::config::LegacyInput{importPath.wstring(), importPath.string(), false}, imported);
@@ -588,12 +688,22 @@ void TestComparisonTwoImportAgainstMigration(const std::vector<Input>& inputs, c
             if (!usable) {
                 Check(result.status == ImportStatus::Refused, n + ": the import refuses what the frozen reader refused");
             } else {
-                const bool dropsReticle = !frozen.show_aim_marker;
+                std::vector<std::pair<DropRule, std::string>> expectedDrops;
+                if (IsModifierKey(frozen.vk_toggle)) expectedDrops.push_back({DropRule::ModifierKey, "Toggle"});
+                if (IsModifierKey(frozen.vk_cycle_mode)) expectedDrops.push_back({DropRule::ModifierKey, "CycleMode"});
+                if (IsModifierKey(frozen.vk_yaw_mode)) expectedDrops.push_back({DropRule::ModifierKey, "YawMode"});
+                if (!frozen.show_aim_marker) expectedDrops.push_back({DropRule::Reticle, "ShowAimMarker"});
+                std::vector<std::pair<DropRule, std::string>> drops;
+                for (const auto& d : result.dropped) drops.push_back({d.rule, d.key});
                 Check(result.status == ImportStatus::Imported, n + ": the import reads the file");
-                Check(result.dropped.size() == (dropsReticle ? 1u : 0u) &&
-                          (!dropsReticle || (result.dropped[0].rule == DropRule::Reticle &&
-                                             result.dropped[0].key == "ShowAimMarker")),
-                      n + ": the only value the import drops is ShowAimMarker=false, by the reticle rule");
+                Check(drops == expectedDrops, n + ": the import drops a modifier nav key by N3 and ShowAimMarker=false "
+                                                  "by the reticle rule, and nothing else");
+                const std::set<Concept> follows(result.follows_defaults_ini.begin(), result.follows_defaults_ini.end());
+                Check(follows.size() == result.follows_defaults_ini.size(), n + ": follows_defaults_ini names each row once");
+                Check(follows == untouched, n + ": the rows left to Defaults.ini are exactly the ones the player never changed");
+                if (input.name == "dev first run" || input.name == "empty file") {
+                    Check(untouched == AllGlobalRows(), n + ": every row follows Defaults.ini");
+                }
             }
         }
 
@@ -620,8 +730,21 @@ void TestComparisonTwoImportAgainstMigration(const std::vector<Input>& inputs, c
         if (!frozen.show_aim_marker) {
             Check(Contains(m.log, "[General] ShowAimMarker=false"), n + ": the log names the dropped ShowAimMarker");
         }
+        for (const auto& [vk, key] : {std::pair<int, const char*>{frozen.vk_toggle, "Toggle"},
+                                      {frozen.vk_cycle_mode, "CycleMode"},
+                                      {frozen.vk_yaw_mode, "YawMode"}}) {
+            if (IsModifierKey(vk)) {
+                Check(Contains(m.log, std::string("[Hotkeys] ") + key + "="), n + ": the log names the unbound " + key);
+            }
+        }
         const std::string written = ReadBytes(m.config);
         migrated.insert(written);
+        // Every row the player never changed is written default, so it follows Defaults.ini
+        // from here on, whatever that file holds.
+        for (const Concept id : untouched) {
+            Check(written.find("\r\n" + RowKey(id) + "=default\r\n") != std::string::npos,
+                  n + ": the untouched row " + RowKey(id) + " is written default");
+        }
 
         // The next launch reads CameraUnlock.ini over the same Defaults.ini, with nothing to
         // report, to the same settings, does not import, and writes neither file.

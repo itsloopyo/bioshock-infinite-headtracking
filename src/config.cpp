@@ -20,20 +20,26 @@ using cameraunlock::config::DropRule;
 using cameraunlock::config::DroppedValue;
 using cameraunlock::config::ImportResult;
 using cameraunlock::config::LegacyInput;
-using cameraunlock::input::KeyBinding;
+using cameraunlock::config::schema::Concept;
 using cameraunlock::input::KeyModifiers;
 
 // A legacy nav key and its chord switch as one key list. The frozen reader hands back a
 // code from 0 to 0xFE: anything else in the file already fell back to the shipped key there,
-// and 0 was the poller's unbound.
-std::string LegacyKeyList(int vk, bool chord, int letter) {
-    std::vector<KeyBinding> bindings;
-    if (vk != 0) bindings.push_back({KeyModifiers::kNone, vk});
-    if (chord) bindings.push_back({KeyModifiers::kCtrl | KeyModifiers::kShift, letter});
-    return cameraunlock::input::FormatKeyBindings(bindings);
+// and 0 was the poller's unbound. A Ctrl, Shift or Alt key on its own imports as unbound and
+// is logged (N3), and the chord still follows it.
+std::string LegacyKeyList(int vk, const char* key, bool chord, int letter, std::vector<DroppedValue>& dropped) {
+    std::string list = cameraunlock::config::LegacyVirtualKeyToBindings(vk, "Hotkeys", key, dropped);
+    if (chord) {
+        const std::string chord_list =
+            cameraunlock::input::FormatKeyBindings({{KeyModifiers::kCtrl | KeyModifiers::kShift, letter}});
+        list += (list.empty() ? "" : ", ") + chord_list;
+    }
+    return list;
 }
 
-void MapLegacy(const legacy::Config& c, Config& out, std::vector<DroppedValue>& dropped) {
+// Maps the frozen reader's settings, and returns the rows the player never changed from what
+// the last pre-canonical build shipped, which follow Defaults.ini.
+std::vector<Concept> MapLegacy(const legacy::Config& c, Config& out, std::vector<DroppedValue>& dropped) {
     out.udp_port = c.udp_port;
     out.enable_on_startup = c.enabled_on_startup;
     out.world_space_yaw = c.world_space_yaw;
@@ -57,9 +63,9 @@ void MapLegacy(const legacy::Config& c, Config& out, std::vector<DroppedValue>& 
     out.pos_limit_z = c.pos_limit_z;
     out.pos_limit_z_back = c.pos_limit_z_back;
 
-    out.toggle_key = LegacyKeyList(c.vk_toggle, c.chord_toggle, 'Y');
-    out.cycle_tracking_mode_key = LegacyKeyList(c.vk_cycle_mode, c.chord_cycle_mode, 'G');
-    out.yaw_mode_key = LegacyKeyList(c.vk_yaw_mode, c.chord_yaw_mode, 'H');
+    out.toggle_key = LegacyKeyList(c.vk_toggle, "Toggle", c.chord_toggle, 'Y', dropped);
+    out.cycle_tracking_mode_key = LegacyKeyList(c.vk_cycle_mode, "CycleMode", c.chord_cycle_mode, 'G', dropped);
+    out.yaw_mode_key = LegacyKeyList(c.vk_yaw_mode, "YawMode", c.chord_yaw_mode, 'H', dropped);
 
     out.fov_override = c.fov_override;
     out.state_probe = c.state_probe;
@@ -69,6 +75,28 @@ void MapLegacy(const legacy::Config& c, Config& out, std::vector<DroppedValue>& 
     if (!c.show_aim_marker) {
         dropped.push_back({DropRule::Reticle, "General", "ShowAimMarker", "false"});
     }
+
+    // Each hotkey row is its nav key and its chord switch together.
+    const legacy::Config shipped;
+    cameraunlock::config::LegacyFollowsDefaultsIni follows;
+    follows.Setting(Concept::UdpPort, c.udp_port, shipped.udp_port);
+    follows.Setting(Concept::EnableOnStartup, c.enabled_on_startup, shipped.enabled_on_startup);
+    follows.Setting(Concept::WorldSpaceYaw, c.world_space_yaw, shipped.world_space_yaw);
+    follows.TrackingMode(c.position_enabled, shipped.position_enabled);
+    follows.Setting(Concept::DataFreshnessMs, c.data_freshness_ms, shipped.data_freshness_ms);
+    follows.Setting(Concept::LocalSmoothing, c.local_smoothing, shipped.local_smoothing);
+    follows.Setting(Concept::RemoteSmoothing, c.remote_smoothing, shipped.remote_smoothing);
+    follows.Setting(Concept::PositionLimitX, c.pos_limit_x, shipped.pos_limit_x);
+    follows.Setting(Concept::PositionLimitY, c.pos_limit_y, shipped.pos_limit_y);
+    follows.Setting(Concept::PositionLimitYDown, c.pos_limit_y_down, shipped.pos_limit_y_down);
+    follows.Setting(Concept::PositionLimitZ, c.pos_limit_z, shipped.pos_limit_z);
+    follows.Setting(Concept::PositionLimitZBack, c.pos_limit_z_back, shipped.pos_limit_z_back);
+    follows.Setting(Concept::ToggleKey, c.vk_toggle == shipped.vk_toggle && c.chord_toggle == shipped.chord_toggle);
+    follows.Setting(Concept::CycleTrackingModeKey,
+                    c.vk_cycle_mode == shipped.vk_cycle_mode && c.chord_cycle_mode == shipped.chord_cycle_mode);
+    follows.Setting(Concept::YawModeKey,
+                    c.vk_yaw_mode == shipped.vk_yaw_mode && c.chord_yaw_mode == shipped.chord_yaw_mode);
+    return follows.Concepts();
 }
 
 ImportResult RunLegacyImport(const LegacyInput& input, Config& out) {
@@ -81,23 +109,23 @@ ImportResult RunLegacyImport(const LegacyInput& input, Config& out) {
     std::vector<DroppedValue> dropped;
     legacy::Config read;
     if (folder.empty()) {
-        MapLegacy(read, out, dropped);
-        return ImportResult::Absent(std::move(dropped));
+        std::vector<Concept> follows = MapLegacy(read, out, dropped);
+        return ImportResult::Absent(std::move(dropped), {}, std::move(follows));
     }
     std::string path = folder;
     for (const wchar_t c : input.path.substr(slash + 1)) path.push_back(static_cast<char>(c));
 
     if (GetFileAttributesA(path.c_str()) == INVALID_FILE_ATTRIBUTES) {
-        MapLegacy(read, out, dropped);
-        return ImportResult::Absent(std::move(dropped));
+        std::vector<Concept> follows = MapLegacy(read, out, dropped);
+        return ImportResult::Absent(std::move(dropped), {}, std::move(follows));
     }
     if (!legacy::Read(path.c_str(), read)) {
         return ImportResult::Refused(
             "[General] Port is not a number from 1024 to 65535, which the last version refused too, so "
             "head tracking stays off until the Port line is fixed");
     }
-    MapLegacy(read, out, dropped);
-    return ImportResult::Imported(std::move(dropped));
+    std::vector<Concept> follows = MapLegacy(read, out, dropped);
+    return ImportResult::Imported(std::move(dropped), {}, std::move(follows));
 }
 
 }  // namespace
