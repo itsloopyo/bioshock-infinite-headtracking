@@ -16,6 +16,14 @@
     }
   ],
 
+  "config": {
+    "path": "Binaries/Win32/CameraUnlock.ini",
+    "anchor": "game_root",
+    "legacy_source": "Binaries/Win32/HeadTracking.ini",
+    "canonical_since": "0.0.0",
+    "per_game": {}
+  },
+
   "runtime_requirements": [],
 
   "dependencies": []
