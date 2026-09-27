@@ -284,18 +284,6 @@ AimGeometry=false
 ```
 <!-- /cameraunlock:config -->
 
-Earlier versions read `[General] ShowAimMarker` from `HeadTracking.ini`, which could stop
-the game's crosshair following your aim. It is gone: the crosshair always follows the aim
-now, and the import leaves the key out. Each hotkey was a virtual-key code with a separate
-chord switch (`Toggle=0x23`, `ChordToggle=true`); the import writes both into one key list
-(`ToggleKey=End, Ctrl+Shift+Y`). `[Position] Enabled` becomes the tracking mode pair,
-`RotationEnabled` and `PositionEnabled`.
-
-A `HeadTracking.ini` holding a position limit above 10 metres is not imported, because
-`CameraUnlock.ini` takes limits from 0 to 10. The mod then runs on the values the file
-holds, saves nothing, creates no `CameraUnlock.ini`, and says why in `HeadTracking.log` at
-every start until the value is 10 or less.
-
 Pose shaping belongs to the tracker. Set sensitivity, deadzones, response curves and axis
 inversion once in OpenTrack or your phone app, and one profile then behaves the same in
 every game.
@@ -391,7 +379,7 @@ and starts the live file empty, so neither grows over time.
 Download the new release and run `install.cmd` again. It overwrites the DLL and leaves
 `CameraUnlock.ini` and `HeadTracking.ini` alone, so your settings and hotkeys are preserved.
 Updating from a version that kept its settings in `HeadTracking.ini` imports them into
-`CameraUnlock.ini` at the first start, as [Configuration](#configuration) describes.
+`CameraUnlock.ini` at the first start, as [CHANGELOG.md](CHANGELOG.md) describes.
 
 ## Uninstalling
 
