@@ -86,6 +86,18 @@ if (git -C $ProjectRoot tag --list $tag) {
     exit 1
 }
 
+Write-Host "Running the full test suite..." -ForegroundColor Cyan
+Push-Location $ProjectRoot
+try {
+    pixi run test
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "Error: pixi run test failed. Nothing was changed." -ForegroundColor Red
+        exit 1
+    }
+} finally {
+    Pop-Location
+}
+
 # --- 3. THIRD-PARTY-NOTICES re-sync -----------------------------------
 #
 #

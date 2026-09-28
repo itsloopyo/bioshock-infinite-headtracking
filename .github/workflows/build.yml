@@ -14,14 +14,12 @@ on:
       - 'docs/**'
       - 'LICENSE'
 
-# Read-only. This job checks out, builds and throws the result away - it pushes
-# nothing, comments on nothing and cuts no release. Stated rather than left to the
-# repository default, which grants the job token write access to contents on a repo
-# that has not been switched over, and hands every third-party action in the steps
-# below the ability to commit to this repo. release.yml asks for contents:write
-# separately, at the one job that needs it.
 permissions:
   contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   build:

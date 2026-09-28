@@ -113,6 +113,7 @@ foreach(suite bsi_tests bsi_config_tests bsi_port_reclaim_tests bsi_memory_tests
     endif()
     add_test(NAME ${suite} COMMAND ${suite})
 endforeach()
+set_tests_properties(bsi_config_differential_tests PROPERTIES LABELS differential)
 
 target_link_libraries(bsi_port_reclaim_tests PRIVATE ws2_32)
 

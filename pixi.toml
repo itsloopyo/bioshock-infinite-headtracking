@@ -32,9 +32,11 @@ uninstall = "scripts/uninstall.cmd /y"
 
 # UE3 rotation maths, the head-pose composition, the aim vector, the config and its import
 # from HeadTracking.ini, and the tracker-port reclaim. Compiled from source every time - never
-# a prebuilt binary. Then core's canonical config lint over the committed file and every
-# CameraUnlock.ini the differential test migrated.
-test = { cmd = "ctest --test-dir build -C Release --output-on-failure && node tests/config_differential/lint-migrated.mjs build/tests/migrated", depends-on = ["build-release"] }
+# a prebuilt binary. test-differential is the config differential test, then core's
+# canonical config lint over the committed file and every CameraUnlock.ini it migrated.
+test-unit = { cmd = "ctest --test-dir build -C Release --output-on-failure -LE differential", depends-on = ["build-release"] }
+test-differential = { cmd = "ctest --test-dir build -C Release --output-on-failure --no-tests=error -L differential && node tests/config_differential/lint-migrated.mjs build/tests/migrated", depends-on = ["build-release"] }
+test = { depends-on = ["test-unit", "test-differential"] }
 
 # Rewrite config/HeadTracking.ini, the committed copy of the CameraUnlock.ini the mod creates
 # at first launch, from the config table after a change to a row, a comment or a default;
@@ -44,7 +46,7 @@ render-config = { cmd = "build/tests/Release/bsi_config_tests.exe --render-confi
 
 # Package the installer ZIP. Installer-only: see the header of package-release.ps1 for
 # why there is no Nexus archive.
-package = { cmd = "powershell -ExecutionPolicy Bypass -File scripts/package-release.ps1", depends-on = ["build-release", "test"] }
+package = { cmd = "powershell -ExecutionPolicy Bypass -File scripts/package-release.ps1", depends-on = ["build-release", "test-unit"] }
 
 # Both take no arguments: they validate this repo's own newest release ZIP and its own
 # THIRD-PARTY-NOTICES.md.
