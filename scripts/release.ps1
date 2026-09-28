@@ -39,22 +39,6 @@ if ($Version -eq 'nightly') {
 
 Import-Module (Join-Path $ProjectRoot 'cameraunlock-core/powershell/ReleaseWorkflow.psm1') -Force
 
-# Mirrors New-ChangelogFromCommits' insertion so a -Force maintenance entry
-# lands in the same place with the same shape.
-function Add-MaintenanceChangelogEntry {
-    param([string]$Path, [string]$NewVersion)
-    $date = Get-Date -Format 'yyyy-MM-dd'
-    $entry = "## [$NewVersion] - $date`n`n### Changed`n`n- Maintenance release (no user-facing changes).`n`n"
-    $changelog = Get-Content $Path -Raw
-    if ($changelog -match '(?s)(# Changelog.*?)(## \[)') {
-        $changelog = $changelog -replace '(?s)(# Changelog.*?\n\n)', "`$1$entry"
-    } else {
-        $changelog = $changelog -replace '(?s)(# Changelog.*?\n)', "`$1$entry"
-    }
-    $changelog = $changelog.TrimEnd() + "`n"
-    Set-Content $Path $changelog -NoNewline
-}
-
 function Write-NoBom {
     param([string]$Path, [string]$Text)
     [System.IO.File]::WriteAllText($Path, $Text, (New-Object System.Text.UTF8Encoding $false))
@@ -145,34 +129,25 @@ Write-Host "Releasing $current -> $target" -ForegroundColor Cyan
 # no tag.
 $changelogPath = Join-Path $ProjectRoot 'CHANGELOG.md'
 Write-Host "Generating CHANGELOG from commits..." -ForegroundColor Cyan
-$hasTags = git -C $ProjectRoot tag -l 2>$null
-if (-not $hasTags) {
-    # First release - ensure a baseline CHANGELOG exists
-    if (-not (Test-Path $changelogPath)) {
-        $date = Get-Date -Format 'yyyy-MM-dd'
-        Set-Content $changelogPath "# Changelog`n`n## [$target] - $date`n`nFirst release.`n"
+try {
+    $changelogArgs = @{
+        ChangelogPath = $changelogPath
+        Version       = $target
+        # Kept in step with artifact-paths in .github/workflows/release.yml: the
+        # committed CHANGELOG and the published release notes are generated from
+        # these two lists, so a difference makes them disagree about the release.
+        ArtifactPaths = @('src/', 'cameraunlock-core', 'scripts/install.cmd',
+                          'scripts/uninstall.cmd', 'CMakeLists.txt',
+                          'launcher-manifest.json')
+        Maintenance   = [bool]$Force
     }
-} else {
-    try {
-        $changelogArgs = @{
-            ChangelogPath = $changelogPath
-            Version       = $target
-            # Kept in step with artifact-paths in .github/workflows/release.yml: the
-            # committed CHANGELOG and the published release notes are generated from
-            # these two lists, so a difference makes them disagree about the release.
-            ArtifactPaths = @('src/', 'cameraunlock-core', 'scripts/install.cmd',
-                              'scripts/uninstall.cmd', 'CMakeLists.txt',
-                              'launcher-manifest.json')
-        }
-        New-ChangelogFromCommits @changelogArgs | Out-Null
-    } catch {
-        if (-not $Force) {
-            Write-Error "$($_.Exception.Message)`nNo user-facing changes to release. Re-run with -Force for a maintenance release."
-            exit 1
-        }
-        Write-Host "No user-facing commits since last tag - writing maintenance entry (-Force)." -ForegroundColor Yellow
-        Add-MaintenanceChangelogEntry -Path $changelogPath -NewVersion $target
+    New-ChangelogFromCommits @changelogArgs | Out-Null
+} catch {
+    if (-not $Force) {
+        Write-Error "$($_.Exception.Message)`nNo user-facing changes to release. Re-run with -Force for a maintenance release."
+        exit 1
     }
+    throw
 }
 
 # --- 4. Bump the canonical version (CMakeLists.txt) + derived copies ---
