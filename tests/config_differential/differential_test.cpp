@@ -15,7 +15,8 @@
 // Comparison 2, import against migration, finds only what data/config-format.json in core
 // approves: the reticle rule, which drops [General] ShowAimMarker=false because the game's
 // crosshair now always follows the aim, N3, which unbinds a nav key on a Ctrl, Shift or Alt
-// key alone, and the owner rule of 2026-09-26 that a setting the player never changed from
+// key alone, N4, which imports a position limit above the canonical rows' 10 m as 10, and the
+// owner rule of 2026-09-26 that a setting the player never changed from
 // what the published build shipped follows Defaults.ini. It runs twice, once over a
 // Defaults.ini at the built-in values and once over one a player changed, where every row the
 // player never changed takes Defaults.ini's value and every other row keeps the player's.
@@ -295,9 +296,15 @@ void UnbindModifierKeys(std::vector<KeyBinding>& list) {
                list.end());
 }
 
-// What the migration may run on: the import's reading, with each untouched row at what
-// Defaults.ini gives, which `defaults` holds as the owner reads it with no config file.
+constexpr float kMaxLimit = 10.0f;
+
+// What the migration may run on: the import's reading, with each position limit above 10 at 10
+// (N4), and each untouched row at what Defaults.ini gives, which `defaults` holds as the owner
+// reads it with no config file.
 Effective Expected(Effective e, const std::set<Concept>& untouched, const Effective& defaults) {
+    for (float* limit : {&e.pos_limit_x, &e.pos_limit_y, &e.pos_limit_y_down, &e.pos_limit_z, &e.pos_limit_z_back}) {
+        *limit = std::min(*limit, kMaxLimit);
+    }
     UnbindModifierKeys(e.toggle);
     UnbindModifierKeys(e.cycle_mode);
     UnbindModifierKeys(e.yaw_mode);
@@ -539,8 +546,9 @@ std::vector<Input> Inputs() {
         bytes.replace(bytes.find(from), from.size(), std::string("AdsMode=") + mode);
         out.push_back({std::string("dev first run, AdsMode saved as ") + mode, true, bytes});
     }
-    // A position limit past the canonical 0-10 m range, which the published build took.
-    for (const char* limit : {"LimitX=11", "LimitZ=100"}) {
+    // A position limit past the canonical 0-10 m range, which the published build took and N4
+    // brings to 10, and 10 itself, which it leaves.
+    for (const char* limit : {"LimitX=11", "LimitZ=100", "LimitYDown=10"}) {
         std::string bytes = first_run;
         const std::string key = std::string(limit).substr(0, std::string(limit).find('=') + 1);
         const std::size_t at = bytes.find(key);
@@ -604,17 +612,6 @@ void TestComparisonOneOracleAgainstImport(const std::vector<Input>& inputs) {
     }
 }
 
-// A position limit the published build took and the canonical 0-10 m range does not hold.
-// No normalisation or approved change covers it, so the owner defers such a file: it stays
-// as it was, the session runs on the imported values, nothing is saved, and the conversion
-// is tried again at every launch until core widens the range or the owner rules on it.
-bool HoldsALimitPastTheCanonicalRange(const legacy::Config& c) {
-    for (const float limit : {c.pos_limit_x, c.pos_limit_y, c.pos_limit_y_down, c.pos_limit_z, c.pos_limit_z_back}) {
-        if (limit > 10.0f) return true;
-    }
-    return false;
-}
-
 bool Contains(const std::vector<std::string>& lines, const std::string& text) {
     for (const std::string& line : lines) {
         if (line.find(text) != std::string::npos) return true;
@@ -661,8 +658,8 @@ void TestComparisonTwoImportAgainstMigration(const std::vector<Input>& inputs, c
         }
 
         // The approved differences: the reticle rule drops ShowAimMarker=false, N3 unbinds a
-        // nav key on a modifier alone, and an untouched row takes what Defaults.ini gives,
-        // in a deferred import's session too.
+        // nav key on a modifier alone, N4 brings a limit above 10 to 10, and an untouched row
+        // takes what Defaults.ini gives.
         const std::set<Concept> untouched = Untouched(frozen);
         Effective allowed = usable ? Expected(i, untouched, defaultValues) : i;
         if (usable) allowed.show_aim_marker = true;
@@ -677,8 +674,9 @@ void TestComparisonTwoImportAgainstMigration(const std::vector<Input>& inputs, c
         Check(Stamp(defaults) == defaultsBefore, n + ": Defaults.ini is left exactly as it was");
 
         if (builtin) {
-            // The import as the owner runs it: it drops a nav key on a modifier alone by N3
-            // and ShowAimMarker=false by the reticle rule, and nothing else, reads no pose
+            // The import as the owner runs it: it records a limit above 10 by N4, drops a nav
+            // key on a modifier alone by N3 and ShowAimMarker=false by the reticle rule, and
+            // nothing else, reads no pose
             // shaping, since the published build had none left to read, and leaves to
             // Defaults.ini exactly the rows the player never changed.
             Config imported = ConfigTable().defaults();
@@ -689,6 +687,13 @@ void TestComparisonTwoImportAgainstMigration(const std::vector<Input>& inputs, c
                 Check(result.status == ImportStatus::Refused, n + ": the import refuses what the frozen reader refused");
             } else {
                 std::vector<std::pair<DropRule, std::string>> expectedDrops;
+                for (const auto& [limit, key] : {std::pair<float, const char*>{frozen.pos_limit_x, "LimitX"},
+                                                 {frozen.pos_limit_y, "LimitY"},
+                                                 {frozen.pos_limit_y_down, "LimitYDown"},
+                                                 {frozen.pos_limit_z, "LimitZ"},
+                                                 {frozen.pos_limit_z_back, "LimitZBack"}}) {
+                    if (limit > kMaxLimit) expectedDrops.push_back({DropRule::NumberOutOfRange, key});
+                }
                 if (IsModifierKey(frozen.vk_toggle)) expectedDrops.push_back({DropRule::ModifierKey, "Toggle"});
                 if (IsModifierKey(frozen.vk_cycle_mode)) expectedDrops.push_back({DropRule::ModifierKey, "CycleMode"});
                 if (IsModifierKey(frozen.vk_yaw_mode)) expectedDrops.push_back({DropRule::ModifierKey, "YawMode"});
@@ -696,8 +701,8 @@ void TestComparisonTwoImportAgainstMigration(const std::vector<Input>& inputs, c
                 std::vector<std::pair<DropRule, std::string>> drops;
                 for (const auto& d : result.dropped) drops.push_back({d.rule, d.key});
                 Check(result.status == ImportStatus::Imported, n + ": the import reads the file");
-                Check(drops == expectedDrops, n + ": the import drops a modifier nav key by N3 and ShowAimMarker=false "
-                                                  "by the reticle rule, and nothing else");
+                Check(drops == expectedDrops, n + ": the import records a limit above 10 by N4, drops a modifier nav key "
+                                                  "by N3 and ShowAimMarker=false by the reticle rule, and nothing else");
                 const std::set<Concept> follows(result.follows_defaults_ini.begin(), result.follows_defaults_ini.end());
                 Check(follows.size() == result.follows_defaults_ini.size(), n + ": follows_defaults_ini names each row once");
                 Check(follows == untouched, n + ": the rows left to Defaults.ini are exactly the ones the player never changed");
@@ -713,13 +718,6 @@ void TestComparisonTwoImportAgainstMigration(const std::vector<Input>& inputs, c
             Check(FolderListing(m.dir) == legacyOnly, n + ": a refused file gets no CameraUnlock.ini");
             continue;
         }
-        if (HoldsALimitPastTheCanonicalRange(frozen)) {
-            Check(m.status == ConfigLoadStatus::Deferred, n + ": a limit past 10 m defers the import");
-            Check(FolderListing(m.dir) == legacyOnly, n + ": a deferred import creates no CameraUnlock.ini");
-            Check(m.reason.find("[Position] PositionLimit") != std::string::npos && m.reason.find("cannot be converted") != std::string::npos,
-                  n + ": the player is told which limit stops the import: " + m.reason);
-            continue;
-        }
 
         Check(m.status == ConfigLoadStatus::Migrated, n + ": the file is imported, status " +
                                                           std::to_string(static_cast<int>(m.status)) + ": " + m.reason);
@@ -729,6 +727,9 @@ void TestComparisonTwoImportAgainstMigration(const std::vector<Input>& inputs, c
         Check(Contains(m.log, "created from"), n + ": the log says where CameraUnlock.ini came from");
         if (!frozen.show_aim_marker) {
             Check(Contains(m.log, "[General] ShowAimMarker=false"), n + ": the log names the dropped ShowAimMarker");
+        }
+        if (frozen.pos_limit_x > kMaxLimit) {
+            Check(Contains(m.log, "[Position] LimitX="), n + ": the log names the clamped LimitX");
         }
         for (const auto& [vk, key] : {std::pair<int, const char*>{frozen.vk_toggle, "Toggle"},
                                       {frozen.vk_cycle_mode, "CycleMode"},

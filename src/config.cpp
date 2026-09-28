@@ -19,6 +19,7 @@ namespace {
 using cameraunlock::config::DropRule;
 using cameraunlock::config::DroppedValue;
 using cameraunlock::config::ImportResult;
+using cameraunlock::config::LegacyClampToRange;
 using cameraunlock::config::LegacyInput;
 using cameraunlock::config::schema::Concept;
 using cameraunlock::input::KeyModifiers;
@@ -56,12 +57,15 @@ std::vector<Concept> MapLegacy(const legacy::Config& c, Config& out, std::vector
     out.position_enabled = mode.position_enabled;
 
     // LimitYDown fell back to LimitY when the file left it out; the frozen reader already
-    // resolved that, so both are explicit here.
-    out.pos_limit_x = c.pos_limit_x;
-    out.pos_limit_y = c.pos_limit_y;
-    out.pos_limit_y_down = c.pos_limit_y_down;
-    out.pos_limit_z = c.pos_limit_z;
-    out.pos_limit_z_back = c.pos_limit_z_back;
+    // resolved that, so both are explicit here. The reader took any finite limit from 0 up, and
+    // one above the rows' 10 imports as 10 (N4).
+    out.pos_limit_x = LegacyClampToRange<Concept::PositionLimitX>(c.pos_limit_x, "Position", "LimitX", dropped);
+    out.pos_limit_y = LegacyClampToRange<Concept::PositionLimitY>(c.pos_limit_y, "Position", "LimitY", dropped);
+    out.pos_limit_y_down =
+        LegacyClampToRange<Concept::PositionLimitYDown>(c.pos_limit_y_down, "Position", "LimitYDown", dropped);
+    out.pos_limit_z = LegacyClampToRange<Concept::PositionLimitZ>(c.pos_limit_z, "Position", "LimitZ", dropped);
+    out.pos_limit_z_back =
+        LegacyClampToRange<Concept::PositionLimitZBack>(c.pos_limit_z_back, "Position", "LimitZBack", dropped);
 
     out.toggle_key = LegacyKeyList(c.vk_toggle, "Toggle", c.chord_toggle, 'Y', dropped);
     out.cycle_tracking_mode_key = LegacyKeyList(c.vk_cycle_mode, "CycleMode", c.chord_cycle_mode, 'G', dropped);
@@ -76,7 +80,8 @@ std::vector<Concept> MapLegacy(const legacy::Config& c, Config& out, std::vector
         dropped.push_back({DropRule::Reticle, "General", "ShowAimMarker", "false"});
     }
 
-    // Each hotkey row is its nav key and its chord switch together.
+    // Each hotkey row is its nav key and its chord switch together. A limit is compared as
+    // read, so one N4 clamped is the player's.
     const legacy::Config shipped;
     cameraunlock::config::LegacyFollowsDefaultsIni follows;
     follows.Setting(Concept::UdpPort, c.udp_port, shipped.udp_port);
